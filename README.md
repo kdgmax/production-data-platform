@@ -34,6 +34,7 @@ This repository implements those concerns in a small system that can be run loca
 | Partitioned lake output | Accepted and rejected rows are written as batch-date-partitioned Parquet datasets. |
 | Operational dashboard | Streamlit visualizes SLOs, throughput, quarantine, quality, and file health. |
 | Machine-readable monitoring | The same portable metrics contract is available as JSON for automation. |
+| Scheduled orchestration | Airflow 3 schedules daily partitions with catchup, retries, dependencies, and SLO gates. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, Spark tests, and a PostgreSQL integration test. |
 
@@ -49,6 +50,7 @@ flowchart TD
     E --> G["Quality and lineage"]
     F --> G
     G --> H["Operations dashboard"]
+    H --> I["Airflow SLO gate"]
 ```
 
 Read the detailed [architecture and engineering decisions](docs/architecture.md).
@@ -185,6 +187,39 @@ data-platform-observe \
   --success-slo-percent 95
 ```
 
+## Orchestrate daily partitions with Airflow
+
+Start the local Airflow 3 environment and its PostgreSQL metadata database:
+
+```bash
+docker compose -f docker-compose.airflow.yml up --build
+```
+
+Open `http://localhost:8080`. Airflow standalone prints the generated local administrator
+credentials in the container logs. The `orders_daily` DAG runs at 06:00 UTC and processes the
+partition associated with each logical date.
+
+The DAG demonstrates:
+
+- TaskFlow authoring through Airflow 3's stable `airflow.sdk` interface
+- `resolve_partition` to `process_partition` to `evaluate_platform_slo` dependencies
+- Three processing retries with exponential backoff from 1 to 15 minutes
+- `catchup=True` for date-range backfills using the same production path
+- `max_active_runs=1` plus database locks for layered concurrency protection
+- XCom-based result passing and a final reliability SLO gate
+
+Runtime settings are supplied through environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATA_PLATFORM_SOURCE_TEMPLATE` | Local or S3 URI containing a `{date}` placeholder. |
+| `DATA_PLATFORM_DATABASE_URL` | SQLite or PostgreSQL target for pipeline state and models. |
+| `DATA_PLATFORM_SUCCESS_SLO` | Minimum historical run-success percentage, default `95`. |
+
+The Compose file uses PostgreSQL for Airflow metadata and a separate `data_platform` database for
+pipeline state. For production, credentials should come from Airflow Connections or an external
+secrets backend rather than inline development values.
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -213,12 +248,14 @@ src/data_platform/
   monitoring.py        portable historical metrics and SLO evaluation
   dashboard.py         Streamlit operations dashboard
   dashboard_cli.py     dashboard process launcher
+  orchestration.py     scheduled partition runtime and SLO gate
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   sql/                 dialect-specific migrations and models
 tests/                 unit, failure-path, health, and integration tests
 data/                  synthetic source data
 .github/workflows/     CI configuration
+dags/                  Airflow 3 DAG definitions
 ```
 
 ## Test and validate
@@ -228,9 +265,9 @@ pytest
 ruff check .
 ```
 
-GitHub Actions installs Spark and Streamlit, starts a PostgreSQL service, executes both processing
-engines, and renders the dashboard through Streamlit's application test harness on every pull
-request.
+GitHub Actions installs Airflow, Spark, and Streamlit, validates the Airflow Compose file, starts a
+PostgreSQL service, executes both processing engines, parses the DAG graph, and renders the
+dashboard through Streamlit's application test harness on every pull request.
 
 ## Engineering decisions
 
@@ -242,7 +279,10 @@ request.
 - Spark is an optional dependency so the lightweight Python and SQL learning path remains fast.
 - The Spark path writes Parquet lake datasets while the transactional path owns warehouse models.
 - Dashboard metrics live in a UI-independent query layer so they can also power alerts and APIs.
+- Airflow DAG code stays thin while orchestration runtime functions remain directly unit-testable.
+- Catchup reuses the same exactly-once landing path instead of creating a separate backfill loader.
 
 ## Roadmap
 
-- Add scheduled orchestration with Airflow or Dagster
+- Add OpenLineage event emission across Airflow, Spark, and warehouse runs
+- Provision a cloud deployment with Terraform

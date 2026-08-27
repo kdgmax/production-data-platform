@@ -19,6 +19,7 @@ flowchart TD
     E --> G["Quality checks and lineage"]
     F --> G
     G --> H["SLOs and operations dashboard"]
+    H --> I["Airflow scheduling and backfills"]
 ```
 
 ## Reliability properties
@@ -45,6 +46,8 @@ flowchart TD
 | Partition isolation | Spark uses dynamic overwrite for the requested `batch_date` partition. |
 | Reliability SLO | Historical success rate is evaluated against a configurable target. |
 | Monitoring portability | UI-independent metrics are available to Streamlit and JSON consumers. |
+| Scheduled execution | Airflow maps logical dates to source partitions on a daily UTC schedule. |
+| Orchestrator resilience | Exponential task retries and bounded concurrency complement database locks. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -114,6 +117,32 @@ data as JSON for automated consumers. The UI contains KPI cards and separate vie
 recent runs, quality failures, and file state. Streamlit's application test harness renders the
 dashboard during CI so presentation changes are verified without browser automation.
 
+## Airflow orchestration
+
+`dags/orders_daily.py` uses Airflow 3's stable Task SDK interface. The scheduled workflow resolves
+the logical date into a partition, processes that partition through the exactly-once landing
+contract, and evaluates the resulting run against the monitoring SLO.
+
+```mermaid
+flowchart LR
+    A["Resolve partition"] --> B["Process partition"]
+    B --> C["Evaluate platform SLO"]
+```
+
+The processing task retries three times with exponential backoff and a 15-minute ceiling. Catchup
+is enabled so Airflow can schedule historical logical dates through the identical code path. Only
+one DAG run may be active at a time, while the database-backed lock remains the final writer guard
+if another execution path is active.
+
+Airflow receives the processing result through XCom and fails the final task when the current run
+is missing, unsuccessful, or leaves the platform below its configured success-rate SLO. This
+makes data reliability part of workflow success rather than a dashboard-only concern.
+
+The local Compose deployment uses Airflow standalone with a LocalExecutor and PostgreSQL metadata
+database. Pipeline state uses a separate PostgreSQL database created during container startup.
+Environment variables keep the demo easy to run; a production deployment should replace inline
+credentials with Airflow Connections or an external secrets backend.
+
 Run the complete PostgreSQL stack with:
 
 ```bash
@@ -155,4 +184,5 @@ actively processing checksum is rejected so concurrent workers cannot duplicate 
 
 ## Planned milestones
 
-1. Add scheduled orchestration with Airflow or Dagster.
+1. Add OpenLineage event emission across Airflow, Spark, and warehouse runs.
+2. Provision a cloud deployment with Terraform.
