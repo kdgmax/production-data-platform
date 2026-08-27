@@ -5,12 +5,13 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import sqlite3
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .database import Database, sqlite_url
+from .migrations import apply_migrations
 from .quality import QualityResult, assert_quality, run_reconciliation_checks
 from .sql_loader import read_sql
 
@@ -30,22 +31,22 @@ REQUIRED_COLUMNS = {
 class Order:
     order_id: str
     customer_id: str
-    order_ts: str
+    order_ts: datetime
     status: str
     amount_usd: float
-    source_updated_at: str
+    source_updated_at: datetime
 
 
-def utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
-def parse_iso8601(value: str) -> str:
+def parse_iso8601(value: str) -> datetime:
     """Validate an ISO-8601 timestamp and return a normalized UTC value."""
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include a timezone")
-    return parsed.astimezone(UTC).isoformat()
+    return parsed.astimezone(UTC)
 
 
 def validate_row(row: dict[str, str]) -> tuple[Order | None, list[str]]:
@@ -67,7 +68,7 @@ def validate_row(row: dict[str, str]) -> tuple[Order | None, list[str]]:
         amount = 0.0
         errors.append("amount_usd must be numeric")
 
-    normalized_timestamps: dict[str, str] = {}
+    normalized_timestamps: dict[str, datetime] = {}
     for field in ("order_ts", "source_updated_at"):
         try:
             normalized_timestamps[field] = parse_iso8601(row.get(field, ""))
@@ -88,16 +89,6 @@ def validate_row(row: dict[str, str]) -> tuple[Order | None, list[str]]:
         ),
         [],
     )
-
-
-def initialize_warehouse(connection: sqlite3.Connection) -> None:
-    connection.executescript(read_sql("schema.sql"))
-
-    existing_columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(pipeline_runs)").fetchall()
-    }
-    if "error_message" not in existing_columns:
-        connection.execute("ALTER TABLE pipeline_runs ADD COLUMN error_message TEXT")
 
 
 def read_and_validate(input_path: Path) -> tuple[list[Order], list[tuple[dict, list[str]]], int]:
@@ -127,14 +118,12 @@ def read_and_validate(input_path: Path) -> tuple[list[Order], list[tuple[dict, l
     return list(valid_by_order_id.values()), quarantined, deduplicated_rows
 
 
-def load_staging(connection: sqlite3.Connection, orders: list[Order]) -> None:
-    connection.executemany(
+def load_staging(database: Database, orders: list[Order]) -> None:
+    database.executemany(
         """
         INSERT INTO staging_orders (
             order_id, customer_id, order_ts, status, amount_usd, source_updated_at
-        ) VALUES (
-            :order_id, :customer_id, :order_ts, :status, :amount_usd, :source_updated_at
-        )
+        ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(order_id) DO UPDATE SET
             customer_id = excluded.customer_id,
             order_ts = excluded.order_ts,
@@ -143,22 +132,30 @@ def load_staging(connection: sqlite3.Connection, orders: list[Order]) -> None:
             source_updated_at = excluded.source_updated_at
         WHERE excluded.source_updated_at > staging_orders.source_updated_at;
         """,
-        [asdict(order) for order in orders],
+        [
+            (
+                order.order_id,
+                order.customer_id,
+                order.order_ts,
+                order.status,
+                order.amount_usd,
+                order.source_updated_at,
+            )
+            for order in orders
+        ],
     )
 
 
-def transform_warehouse(connection: sqlite3.Connection) -> None:
-    for statement in read_sql("transform.sql").split(";"):
-        if statement.strip():
-            connection.execute(statement)
+def transform_warehouse(database: Database) -> None:
+    database.execute_script(read_sql(database.dialect, "transform.sql"))
 
 
 def store_quality_results(
-    connection: sqlite3.Connection,
+    database: Database,
     run_id: str,
     results: list[QualityResult],
 ) -> None:
-    connection.executemany(
+    database.executemany(
         """
         INSERT INTO data_quality_results (
             run_id, check_name, violation_count, passed, checked_at
@@ -172,10 +169,10 @@ def store_quality_results(
 
 
 def store_run(
-    connection: sqlite3.Connection,
+    database: Database,
     *,
     run_id: str,
-    started_at: str,
+    started_at: datetime,
     input_rows: int,
     accepted_rows: int,
     quarantined_rows: int,
@@ -183,7 +180,7 @@ def store_run(
     status: str,
     error_message: str | None = None,
 ) -> None:
-    connection.execute(
+    database.execute(
         """
         INSERT INTO pipeline_runs (
             run_id, started_at, completed_at, input_rows, accepted_rows,
@@ -204,7 +201,12 @@ def store_run(
     )
 
 
-def run_pipeline(input_path: Path, database_path: Path) -> dict[str, int | str]:
+def run_pipeline(
+    input_path: Path,
+    database_path: Path | None = None,
+    *,
+    database_url: str | None = None,
+) -> dict[str, int | str]:
     """Run one atomic batch and return auditable pipeline metrics."""
     run_id = str(uuid.uuid4())
     started_at = utc_now()
@@ -215,20 +217,24 @@ def run_pipeline(input_path: Path, database_path: Path) -> dict[str, int | str]:
 
     LOGGER.info("Pipeline started", extra={"event": "pipeline_started", "run_id": run_id})
 
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database_path) as connection:
-        initialize_warehouse(connection)
+    if database_url is not None and database_path is not None:
+        raise ValueError("provide database_path or database_url, not both")
+    if database_url is None:
+        database_url = sqlite_url(database_path or Path("warehouse.db"))
+
+    with Database.connect(database_url) as database:
+        apply_migrations(database)
         try:
             orders, quarantined, deduplicated_rows = read_and_validate(input_path)
             accepted_rows = len(orders)
             quarantined_rows = len(quarantined)
             input_rows = accepted_rows + quarantined_rows + deduplicated_rows
 
-            with connection:
-                load_staging(connection, orders)
-                transform_warehouse(connection)
+            with database.transaction():
+                load_staging(database, orders)
+                transform_warehouse(database)
 
-                connection.executemany(
+                database.executemany(
                     """
                     INSERT INTO quarantined_orders (
                         run_id, raw_payload, error_reason, quarantined_at
@@ -240,11 +246,11 @@ def run_pipeline(input_path: Path, database_path: Path) -> dict[str, int | str]:
                     ],
                 )
 
-                quality_results = run_reconciliation_checks(connection)
+                quality_results = run_reconciliation_checks(database)
                 assert_quality(quality_results)
-                store_quality_results(connection, run_id, quality_results)
+                store_quality_results(database, run_id, quality_results)
                 store_run(
-                    connection,
+                    database,
                     run_id=run_id,
                     started_at=started_at,
                     input_rows=input_rows,
@@ -254,9 +260,9 @@ def run_pipeline(input_path: Path, database_path: Path) -> dict[str, int | str]:
                     status="succeeded",
                 )
         except Exception as error:
-            with connection:
+            with database.transaction():
                 store_run(
-                    connection,
+                    database,
                     run_id=run_id,
                     started_at=started_at,
                     input_rows=input_rows,
