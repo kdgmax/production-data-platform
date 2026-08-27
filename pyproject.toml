@@ -15,6 +15,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 [project.scripts]
 run-data-pipeline = "data_platform.cli:main"
 data-platform-health = "data_platform.health:main"
+data-platform-backfill = "data_platform.backfill:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
