@@ -4,6 +4,8 @@ import csv
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from data_platform.pipeline import run_pipeline
 
 FIELDS = [
@@ -55,6 +57,8 @@ def test_loads_valid_rows_and_quarantines_invalid_rows(tmp_path: Path) -> None:
     assert metrics["quarantined_rows"] == 1
     assert scalar(database, "SELECT COUNT(*) FROM fact_orders") == 1
     assert scalar(database, "SELECT COUNT(*) FROM quarantined_orders") == 1
+    assert metrics["quality_checks_passed"] == 4
+    assert scalar(database, "SELECT COUNT(*) FROM data_quality_results") == 4
 
 
 def test_rerun_is_idempotent(tmp_path: Path) -> None:
@@ -101,3 +105,17 @@ def test_batch_keeps_latest_duplicate(tmp_path: Path) -> None:
     assert metrics["deduplicated_rows"] == 1
     assert scalar(database, "SELECT amount_usd FROM fact_orders WHERE order_id = 'ORD-1'") == 40.0
 
+
+def test_schema_failure_is_recorded(tmp_path: Path) -> None:
+    source = tmp_path / "orders.csv"
+    database = tmp_path / "warehouse.db"
+    source.write_text("order_id,amount_usd\nORD-1,25.00\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        run_pipeline(source, database)
+
+    assert scalar(database, "SELECT COUNT(*) FROM pipeline_runs WHERE status = 'failed'") == 1
+    assert "missing required columns" in scalar(
+        database,
+        "SELECT error_message FROM pipeline_runs WHERE status = 'failed'",
+    )
