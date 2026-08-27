@@ -11,6 +11,7 @@ MIGRATIONS = {
     1: "001_core.sql",
     2: "002_quality.sql",
     3: "003_orchestration.sql",
+    4: "004_file_manifest.sql",
 }
 
 
