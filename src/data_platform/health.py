@@ -24,7 +24,8 @@ def get_health_summary(database_url: str) -> dict[str, Any]:
         latest = database.execute(
             """
             SELECT run_id, completed_at, status, input_rows, accepted_rows,
-                   quarantined_rows, deduplicated_rows, error_message
+                   quarantined_rows, deduplicated_rows, error_message,
+                   batch_date, trigger_type
             FROM pipeline_runs
             ORDER BY completed_at DESC
             LIMIT 1
@@ -54,6 +55,8 @@ def get_health_summary(database_url: str) -> dict[str, Any]:
         "quarantined_rows": latest[5],
         "deduplicated_rows": latest[6],
         "error_message": latest[7],
+        "batch_date": serialize(latest[8]),
+        "trigger_type": latest[9],
         "quality_checks": [
             {"name": row[0], "violations": row[1], "passed": bool(row[2])}
             for row in checks
@@ -73,4 +76,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
