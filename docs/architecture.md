@@ -3,18 +3,19 @@
 ## Goal
 
 This repository is a small reference implementation of the reliability patterns used in larger
-batch platforms. It loads order events from local or S3-compatible object storage into an
-analytical warehouse while preserving bad records, recording file lineage, and making reruns safe.
+batch platforms. It loads order events from local or S3-compatible object storage into either an
+analytical warehouse or partitioned Parquet datasets while preserving bad records, recording file
+lineage, and making reruns safe.
 
 ## Data flow
 
 ```mermaid
 flowchart TD
     A["Local or S3 object"] --> B["SHA-256 manifest claim"]
-    B -->|new| C["Schema and row validation"]
-    B -->|duplicate| D["Skip and link prior run"]
-    C -->|valid| E["Idempotent warehouse load"]
-    C -->|invalid| F["Quarantine table"]
+    B -->|duplicate| C["Skip and link prior run"]
+    B -->|new| D{"Execution path"}
+    D -->|Python and SQL| E["Warehouse transaction"]
+    D -->|Spark| F["Partitioned Parquet"]
     E --> G["Quality checks and lineage"]
     F --> G
 ```
@@ -38,6 +39,9 @@ flowchart TD
 | Retry control | Transient database and lock failures use bounded exponential backoff. |
 | Exactly-once files | A unique SHA-256 checksum claim prevents duplicate file content. |
 | Object lineage | URI, checksum, size, ETag, batch date, status, and run ID are persisted. |
+| Spark schema control | Source fields enter as strings and are explicitly parsed into typed columns. |
+| Deterministic Spark deduplication | A window keeps the newest source version with a stable tie-breaker. |
+| Partition isolation | Spark uses dynamic overwrite for the requested `batch_date` partition. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -69,6 +73,26 @@ SQLite keeps the learning path runnable in minutes. PostgreSQL demonstrates the 
 contract against a production-grade database, with dialect-specific DDL and transformations kept
 in version-controlled SQL. GitHub Actions runs the test suite against PostgreSQL on every pull
 request.
+
+## Spark processing path
+
+`data-platform-spark` runs the same landed object through a Spark DataFrame transformation. It
+uses an explicit input schema, validates every business field, and separates rejected rows with a
+raw JSON payload and human-readable error reason. A window function partitions by `order_id` and
+keeps the greatest `source_updated_at`, with a row hash as a deterministic tie-breaker.
+
+The two output datasets are:
+
+- `accepted_orders/batch_date=YYYY-MM-DD`: typed, deduplicated order records
+- `quarantined_orders/batch_date=YYYY-MM-DD`: raw payloads, errors, and run identifiers
+
+Four Spark-specific quality checks run before the write and are persisted in
+`data_quality_results`. The run itself is written to `pipeline_runs` with `trigger_type = 'spark'`.
+The manifest is only marked successful after Spark completes, so failed files remain retryable.
+
+Spark is optional because it solves a different workload from the transactional loader. The
+Python and SQL path remains the clearest option for small atomic warehouse batches, while Spark
+provides a cluster-ready path for larger partitioned datasets.
 
 Run the complete PostgreSQL stack with:
 
@@ -111,4 +135,5 @@ actively processing checksum is rejected so concurrent workers cannot duplicate 
 
 ## Planned milestones
 
-1. Add a Spark implementation for partitioned, higher-volume data.
+1. Publish run-health metrics to an observability dashboard.
+2. Add scheduled orchestration with Airflow or Dagster.
