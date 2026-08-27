@@ -2,7 +2,10 @@
 
 [![CI](https://github.com/kdgmax/production-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/kdgmax/production-data-platform/actions/workflows/ci.yml)
 
-A production-minded batch data platform built with Python, SQL, S3, PostgreSQL, SQLite, Docker, and GitHub Actions. It demonstrates how to ingest imperfect source data, prevent duplicate file processing, preserve invalid records, model analytical tables, verify data quality, and make every pipeline run auditable.
+A production-minded batch data platform built with Python, SQL, Spark, S3, PostgreSQL, SQLite,
+Parquet, Docker, and GitHub Actions. It demonstrates both transactional warehouse loading and
+partitioned scale-out processing while keeping duplicate prevention, quarantine, quality, and
+lineage consistent across engines.
 
 ## Why this project exists
 
@@ -27,20 +30,22 @@ This repository implements those concerns in a small system that can be run loca
 | Object storage | Local and S3-compatible objects share one landing interface. |
 | Exactly-once files | SHA-256 manifest claims prevent duplicate content from being processed twice. |
 | File lineage | Every successful object records its URI, checksum, size, ETag, batch date, and run ID. |
+| Scale-out processing | Spark applies schema enforcement, deterministic deduplication, and quarantine rules. |
+| Partitioned lake output | Accepted and rejected rows are written as batch-date-partitioned Parquet datasets. |
 | Observability | JSON logs, run metrics, error messages, and quality results support investigation. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
-| Delivery controls | Pull requests run linting, unit tests, and a PostgreSQL integration test. |
+| Delivery controls | Pull requests run linting, Spark tests, and a PostgreSQL integration test. |
 
 ## Architecture
 
 ```mermaid
 flowchart TD
     A["Local or S3 object"] --> B["Checksum and manifest claim"]
-    B -->|new| C["Validation and deduplication"]
-    B -->|known| D["Skip duplicate content"]
-    C -->|valid| E["Dimension and fact models"]
-    C -->|invalid| F["Quarantine"]
-    E --> G["Reconciliation and lineage"]
+    B -->|known| C["Skip duplicate content"]
+    B -->|new| D{"Processing engine"}
+    D -->|Python and SQL| E["Warehouse models"]
+    D -->|Spark| F["Partitioned Parquet"]
+    E --> G["Quality and lineage"]
     F --> G
 ```
 
@@ -131,6 +136,28 @@ a different key is skipped and linked to the original successful run.
 Standard AWS credentials are supported automatically. An S3-compatible service can be selected
 with `DATA_PLATFORM_S3_ENDPOINT_URL`.
 
+## Process a partition with Spark
+
+Requirements: Java 17 and the optional Spark dependency.
+
+```bash
+python -m pip install -e ".[dev,spark]"
+
+data-platform-spark \
+  --source-uri s3://my-data-bucket/orders/date=2026-08-27/orders.csv \
+  --batch-date 2026-08-27 \
+  --output-root ./lake \
+  --database-url postgresql://user:password@localhost:5432/data_platform
+```
+
+The Spark path uses an explicit string input schema, validates identifiers, statuses, amounts,
+and timezone-aware timestamps, then deterministically keeps the newest version of each order.
+Valid and quarantined rows are written separately as Parquet under `batch_date` partitions. The
+same checksum manifest, database lock, run audit, and persisted quality results remain in effect.
+
+Local mode defaults to `local[2]`. A cluster master can be supplied with `--master` without
+changing the transformation contract.
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -155,6 +182,7 @@ src/data_platform/
   backfill.py          date-range replay and retry orchestration
   landing.py           checksum claims and exactly-once file processing
   object_store.py      local and S3-compatible object materialization
+  spark_pipeline.py    partitioned Spark validation and Parquet processing
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   sql/                 dialect-specific migrations and models
@@ -170,7 +198,8 @@ pytest
 ruff check .
 ```
 
-GitHub Actions also starts a PostgreSQL service and executes the full integration path on every pull request.
+GitHub Actions installs Spark, starts a PostgreSQL service, and executes both processing engines
+on every pull request.
 
 ## Engineering decisions
 
@@ -179,8 +208,10 @@ GitHub Actions also starts a PostgreSQL service and executes the full integratio
 - SQLite supports a five-minute local start, while PostgreSQL proves the design against a production-grade database.
 - Dialect-specific SQL is explicit rather than hidden behind an ORM, making differences such as `MIN` versus `LEAST` reviewable.
 - Quality results are stored as data, not only emitted as logs, so historical runs can be audited.
+- Spark is an optional dependency so the lightweight Python and SQL learning path remains fast.
+- The Spark path writes Parquet lake datasets while the transactional path owns warehouse models.
 
 ## Roadmap
 
-- Add partitioned Spark processing for higher-volume batches
 - Publish run-health metrics to an observability dashboard
+- Add scheduled orchestration with Airflow or Dagster
