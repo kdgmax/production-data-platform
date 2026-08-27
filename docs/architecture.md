@@ -29,7 +29,9 @@ flowchart TD
 | Batch deduplication | Multiple versions of one order are reduced to the newest version. |
 | Data quality | Invalid amounts, statuses, identifiers, and timestamps are quarantined. |
 | Atomicity | Staging, transformations, quarantine writes, and audit metrics share one transaction. |
-| Observability | Every execution writes counts and status to `pipeline_runs`. |
+| Reconciliation | Four SQL checks run after transformation and are stored for every batch. |
+| Failure audit | Failed runs are persisted with their exception message after rollback. |
+| Observability | Every execution emits JSON logs and writes counts and status to `pipeline_runs`. |
 | Reproducibility | The pipeline has no runtime dependencies beyond Python and SQLite. |
 
 ## Warehouse model
@@ -39,6 +41,7 @@ flowchart TD
 - `fact_orders` stores order-level measures and joins to the customer dimension.
 - `quarantined_orders` preserves the raw record and all validation failures.
 - `pipeline_runs` provides an audit trail for every execution.
+- `data_quality_results` stores each post-transformation reconciliation result.
 
 ## Run locally
 
@@ -61,9 +64,7 @@ contract.
 
 ## Planned milestones
 
-1. Add SQL-based reconciliation checks between staging and marts.
-2. Add structured logs and a run-health summary.
-3. Add Docker Compose with PostgreSQL.
-4. Add orchestration and backfill support.
-5. Add a Spark implementation for partitioned, higher-volume data.
-
+1. Add a run-health summary command over the audit tables.
+2. Add Docker Compose with PostgreSQL.
+3. Add orchestration and backfill support.
+4. Add a Spark implementation for partitioned, higher-volume data.
