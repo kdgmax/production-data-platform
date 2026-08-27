@@ -3,20 +3,19 @@
 ## Goal
 
 This repository is a small reference implementation of the reliability patterns used in larger
-batch platforms. It loads order events from CSV into a local analytical warehouse while preserving
-bad records for investigation and making reruns safe.
+batch platforms. It loads order events from local or S3-compatible object storage into an
+analytical warehouse while preserving bad records, recording file lineage, and making reruns safe.
 
 ## Data flow
 
 ```mermaid
 flowchart TD
-    A["Source CSV"] --> B["Schema and row validation"]
-    B -->|valid| C["Idempotent staging upsert"]
-    B -->|invalid| D["Quarantine table"]
-    C --> E["Customer dimension"]
-    C --> F["Order fact table"]
-    D --> G["Run metrics"]
-    E --> G
+    A["Local or S3 object"] --> B["SHA-256 manifest claim"]
+    B -->|new| C["Schema and row validation"]
+    B -->|duplicate| D["Skip and link prior run"]
+    C -->|valid| E["Idempotent warehouse load"]
+    C -->|invalid| F["Quarantine table"]
+    E --> G["Quality checks and lineage"]
     F --> G
 ```
 
@@ -37,6 +36,8 @@ flowchart TD
 | Concurrency control | A database-backed lock prevents overlapping pipeline writers. |
 | Safe replay | Date partitions can be rerun without duplicating facts. |
 | Retry control | Transient database and lock failures use bounded exponential backoff. |
+| Exactly-once files | A unique SHA-256 checksum claim prevents duplicate file content. |
+| Object lineage | URI, checksum, size, ETag, batch date, status, and run ID are persisted. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -48,6 +49,7 @@ flowchart TD
 - `pipeline_runs` provides an audit trail for every execution.
 - `data_quality_results` stores each post-transformation reconciliation result.
 - `pipeline_locks` stores expiring ownership records for active writers.
+- `file_manifest` stores object identity, processing state, and file-to-run lineage.
 
 ## Run locally
 
@@ -97,7 +99,16 @@ Each run stores `batch_date` and `trigger_type`. A replay is safe because stagin
 use business-key upserts with source-version comparisons. Locks expire automatically so a crashed
 worker cannot block the pipeline permanently.
 
+## Object landing and exactly-once processing
+
+`data-platform-land` accepts a local path, `file://` URI, or `s3://` URI. The object is streamed to
+a temporary local file when necessary, hashed with SHA-256, and claimed through a unique manifest
+constraint before parsing begins. A succeeded checksum is never processed twice, even when the
+same bytes arrive under another object key.
+
+Failed manifest entries remain retryable. A later attempt can reclaim the same checksum, while an
+actively processing checksum is rejected so concurrent workers cannot duplicate work.
+
 ## Planned milestones
 
-1. Add an object-storage landing zone and file manifest.
-2. Add a Spark implementation for partitioned, higher-volume data.
+1. Add a Spark implementation for partitioned, higher-volume data.

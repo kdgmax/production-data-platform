@@ -41,13 +41,14 @@ def test_backfill_processes_range_and_replay_is_safe(tmp_path: Path) -> None:
     second = run_backfill(**arguments)
 
     assert first["succeeded_batches"] == 3
-    assert second["succeeded_batches"] == 3
+    assert second["skipped_batches"] == 3
     assert scalar(database, "SELECT COUNT(*) FROM fact_orders") == 3
-    assert scalar(database, "SELECT COUNT(*) FROM pipeline_runs") == 6
+    assert scalar(database, "SELECT COUNT(*) FROM pipeline_runs") == 3
+    assert scalar(database, "SELECT COUNT(*) FROM file_manifest") == 3
     assert scalar(
         database,
         "SELECT COUNT(*) FROM pipeline_runs WHERE trigger_type = 'backfill'",
-    ) == 6
+    ) == 3
 
 
 def test_backfill_can_continue_after_missing_partition(tmp_path: Path) -> None:
@@ -67,7 +68,7 @@ def test_backfill_can_continue_after_missing_partition(tmp_path: Path) -> None:
     assert result["status"] == "partial"
     assert result["succeeded_batches"] == 1
     assert result["failed_batches"] == 1
-    assert scalar(database, "SELECT COUNT(*) FROM pipeline_runs WHERE status = 'failed'") == 1
+    assert scalar(database, "SELECT COUNT(*) FROM file_manifest") == 1
 
 
 def test_backfill_retries_transient_lock_failure(monkeypatch, tmp_path: Path) -> None:
@@ -78,9 +79,9 @@ def test_backfill_retries_transient_lock_failure(monkeypatch, tmp_path: Path) ->
         attempts += 1
         if attempts == 1:
             raise PipelineLockedError("temporary contention")
-        return {"run_id": "successful-retry"}
+        return {"run_id": "successful-retry", "status": "succeeded"}
 
-    monkeypatch.setattr(backfill_module, "run_pipeline", flaky_pipeline)
+    monkeypatch.setattr(backfill_module, "process_source_file", flaky_pipeline)
 
     result = run_backfill(
         start_date=date(2026, 8, 25),

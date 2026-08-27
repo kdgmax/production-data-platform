@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from data_platform.database import Database
-from data_platform.pipeline import run_pipeline
+from data_platform.landing import process_source_file
 
 from .test_pipeline import order, write_orders
 
@@ -21,7 +21,7 @@ def test_pipeline_runs_against_postgres(tmp_path: Path) -> None:
     source = tmp_path / "orders.csv"
     write_orders(source, [order(order_id=order_id)])
 
-    metrics = run_pipeline(source, database_url=database_url)
+    metrics = process_source_file(source_uri=str(source), database_url=database_url)
 
     with Database.connect(database_url) as database:
         fact_count = database.execute(
@@ -32,4 +32,3 @@ def test_pipeline_runs_against_postgres(tmp_path: Path) -> None:
     assert metrics["accepted_rows"] == 1
     assert metrics["quality_checks_passed"] == 4
     assert fact_count == 1
-

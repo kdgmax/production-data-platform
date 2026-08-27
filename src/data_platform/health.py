@@ -45,6 +45,15 @@ def get_health_summary(database_url: str) -> dict[str, Any]:
             """,
             (run_id,),
         ).fetchall()
+        source_file = database.execute(
+            """
+            SELECT file_uri, checksum_sha256, size_bytes, etag, status
+            FROM file_manifest
+            WHERE run_id = ?
+            LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
 
     return {
         "run_id": run_id,
@@ -61,6 +70,17 @@ def get_health_summary(database_url: str) -> dict[str, Any]:
             {"name": row[0], "violations": row[1], "passed": bool(row[2])}
             for row in checks
         ],
+        "source_file": (
+            {
+                "uri": source_file[0],
+                "checksum_sha256": source_file[1],
+                "size_bytes": source_file[2],
+                "etag": source_file[3],
+                "status": source_file[4],
+            }
+            if source_file
+            else None
+        ),
     }
 
 
