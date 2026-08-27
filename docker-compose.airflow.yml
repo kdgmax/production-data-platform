@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init-airflow.sql:/docker-entrypoint-initdb.d/init-airflow.sql:ro
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    command: standalone
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      DATA_PLATFORM_DATABASE_URL: postgresql://airflow:airflow@postgres:5432/data_platform
+      DATA_PLATFORM_SOURCE_TEMPLATE: /opt/airflow/project/data/partitions/date={date}/orders.csv
+      DATA_PLATFORM_SUCCESS_SLO: "95"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - airflow-logs:/opt/airflow/logs
+
+volumes:
+  airflow-postgres-data:
+  airflow-logs:
