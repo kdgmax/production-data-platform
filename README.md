@@ -35,6 +35,7 @@ This repository implements those concerns in a small system that can be run loca
 | Operational dashboard | Streamlit visualizes SLOs, throughput, quarantine, quality, and file health. |
 | Machine-readable monitoring | The same portable metrics contract is available as JSON for automation. |
 | Scheduled orchestration | Airflow 3 schedules daily partitions with catchup, retries, dependencies, and SLO gates. |
+| OpenLineage | Warehouse, Spark, and Airflow-triggered runs emit interoperable job and dataset lineage. |
 | Cloud infrastructure | Terraform provisions private networking, encrypted S3 and RDS, scoped IAM, and alarms. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, Terraform validation, Spark tests, and a PostgreSQL integration test. |
@@ -50,8 +51,9 @@ flowchart TD
     D -->|Spark| F["Partitioned Parquet"]
     E --> G["Quality and lineage"]
     F --> G
-    G --> H["Operations dashboard"]
-    H --> I["Airflow SLO gate"]
+    G --> H["OpenLineage events"]
+    G --> I["Operations dashboard"]
+    I --> J["Airflow SLO gate"]
 ```
 
 Read the detailed [architecture and engineering decisions](docs/architecture.md).
@@ -221,6 +223,38 @@ The Compose file uses PostgreSQL for Airflow metadata and a separate `data_platf
 pipeline state. For production, credentials should come from Airflow Connections or an external
 secrets backend rather than inline development values.
 
+## Trace datasets with OpenLineage
+
+Install the optional lineage client and enable file-based events locally:
+
+```bash
+python -m pip install -e ".[lineage]"
+cp openlineage.yml.example openlineage.yml
+export DATA_PLATFORM_OPENLINEAGE_ENABLED=true
+export OPENLINEAGE_CONFIG="$PWD/openlineage.yml"
+run-data-pipeline --input data/sample_orders.csv --database-url sqlite:///warehouse.db
+```
+
+`lineage-events.jsonl` will contain a `START` event followed by `COMPLETE` or `FAIL`. Every event
+uses the same run UUID stored in `pipeline_runs` and describes the job, source dataset, output
+datasets, schema, nominal batch time, code location, and available output row counts.
+
+The integration distinguishes `orders.warehouse_load`, `orders.spark_transform`, and
+`orders.airflow_partition`. S3 identities remain stable after local materialization, while database
+namespaces exclude usernames, passwords, and query parameters. Delivery is fail open by default so
+a lineage backend outage does not stop data processing. Set `DATA_PLATFORM_OPENLINEAGE_STRICT=true`
+only when lineage delivery must be part of pipeline success.
+
+The Airflow Compose environment enables file transport automatically. Inspect emitted events with:
+
+```bash
+docker compose -f docker-compose.airflow.yml exec airflow \
+  tail -n 2 /opt/airflow/logs/openlineage-events.jsonl
+```
+
+To use Marquez or another compatible backend, replace the file transport in `openlineage.yml` with
+the backend's HTTP transport configuration.
+
 ## Provision AWS infrastructure with Terraform
 
 The `infrastructure` module defines a deliberately small AWS foundation for the platform:
@@ -278,12 +312,14 @@ src/data_platform/
   orchestration.py     scheduled partition runtime and SLO gate
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
+  lineage.py           OpenLineage jobs, datasets, facets, and fail-open delivery
   sql/                 dialect-specific migrations and models
 tests/                 unit, failure-path, health, and integration tests
 data/                  synthetic source data
 .github/workflows/     CI configuration
 dags/                  Airflow 3 DAG definitions
 infrastructure/        secure AWS foundation expressed as Terraform
+openlineage.yml.example local OpenLineage file-transport configuration
 ```
 
 ## Test and validate
@@ -312,10 +348,12 @@ renders the dashboard through Streamlit's application test harness on every pull
 - Dashboard metrics live in a UI-independent query layer so they can also power alerts and APIs.
 - Airflow DAG code stays thin while orchestration runtime functions remain directly unit-testable.
 - Catchup reuses the same exactly-once landing path instead of creating a separate backfill loader.
+- OpenLineage run IDs match the warehouse audit IDs so metadata can be reconciled with operations.
+- Lineage delivery is fail open by default, with strict mode available for governed environments.
 - Terraform provides the shared data layer while compute remains a separate scaling decision.
 - Private networking avoids recurring NAT cost and prevents accidental public database exposure.
 
 ## Roadmap
 
-- Add OpenLineage event emission across Airflow, Spark, and warehouse runs
 - Add an on-demand ECS runtime and deployment workflow for the Terraform foundation
+- Add column-level lineage for SQL transformations

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .database import Database
+from .lineage import LineageEmitter
 from .migrations import apply_migrations
 from .object_store import MaterializedObject, materialize_object
 from .observability import configure_logging
@@ -134,6 +135,7 @@ def process_source_file(
     database_url: str,
     batch_date: date | None = None,
     trigger_type: str = "landing",
+    lineage_emitter: LineageEmitter | None = None,
 ) -> dict[str, Any]:
     with materialize_object(source_uri) as materialized:
         identity = identify_file(materialized.path)
@@ -162,6 +164,8 @@ def process_source_file(
                 database_url=database_url,
                 batch_date=batch_date,
                 trigger_type=trigger_type,
+                lineage_input_uri=source_uri,
+                lineage_emitter=lineage_emitter,
             )
         # This boundary persists the file failure before propagating it to the caller.
         except Exception as error:

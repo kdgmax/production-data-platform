@@ -18,8 +18,9 @@ flowchart TD
     D -->|Spark| F["Partitioned Parquet"]
     E --> G["Quality checks and lineage"]
     F --> G
-    G --> H["SLOs and operations dashboard"]
-    H --> I["Airflow scheduling and backfills"]
+    G --> H["OpenLineage event transport"]
+    G --> I["SLOs and operations dashboard"]
+    I --> J["Airflow scheduling and backfills"]
 ```
 
 ## Reliability properties
@@ -48,6 +49,7 @@ flowchart TD
 | Monitoring portability | UI-independent metrics are available to Streamlit and JSON consumers. |
 | Scheduled execution | Airflow maps logical dates to source partitions on a daily UTC schedule. |
 | Orchestrator resilience | Exponential task retries and bounded concurrency complement database locks. |
+| Interoperable lineage | OpenLineage connects each run to its source and output datasets. |
 | Infrastructure as code | Terraform defines private AWS networking, storage, database, IAM, and alarms. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
@@ -183,6 +185,35 @@ same bytes arrive under another object key.
 Failed manifest entries remain retryable. A later attempt can reclaim the same checksum, while an
 actively processing checksum is rejected so concurrent workers cannot duplicate work.
 
+## OpenLineage event model
+
+Every warehouse, Spark, and Airflow-triggered execution emits one `START` event and one terminal
+`COMPLETE` or `FAIL` event. The OpenLineage run UUID is the same identifier persisted in
+`pipeline_runs`, which connects external lineage metadata to the internal operational audit.
+
+```mermaid
+flowchart LR
+    Source["Local or S3 source"] --> Job["Warehouse, Spark, or Airflow job"]
+    Job --> Tables["Warehouse tables"]
+    Job --> Lake["Partitioned Parquet"]
+    Job --> Events["OpenLineage START and terminal events"]
+    Events --> Transport["File, HTTP, or compatible backend"]
+```
+
+Dataset identity is assigned before object materialization so an S3 object is not mislabeled as a
+temporary local file. PostgreSQL namespaces are reconstructed without user information, passwords,
+or query parameters. Output statistics attach known row counts, and schema facets describe the
+shared order contract.
+
+The lineage client is optional and disabled unless `DATA_PLATFORM_OPENLINEAGE_ENABLED` is true.
+When enabled, transport configuration follows the standard OpenLineage client configuration. Event
+construction and transport are fail open by default because metadata availability should not block
+the data plane. Governed environments can enable strict mode to make lineage delivery mandatory.
+
+The Airflow Compose image installs the lineage extra and writes events to its persistent log volume.
+This exercises the same application-owned event contract as manual and Spark runs without requiring
+a separate metadata server for local development.
+
 ## AWS deployment foundation
 
 The Terraform module separates the durable data layer from compute. It provisions encrypted S3
@@ -217,5 +248,5 @@ state. See `infrastructure/README.md` for operating instructions.
 
 ## Planned milestones
 
-1. Add OpenLineage event emission across Airflow, Spark, and warehouse runs.
-2. Add an on-demand ECS runtime and approval-protected deployment workflow.
+1. Add an on-demand ECS runtime and approval-protected deployment workflow.
+2. Add column-level lineage for SQL transformations.

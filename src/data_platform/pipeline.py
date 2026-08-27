@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .database import Database, sqlite_url
+from .lineage import LineageEmitter, lineage_job_name, source_dataset, warehouse_datasets
 from .locking import acquire_lock, release_lock
 from .migrations import apply_migrations
 from .quality import QualityResult, assert_quality, run_reconciliation_checks
@@ -215,6 +216,8 @@ def run_pipeline(
     batch_date: date | None = None,
     trigger_type: str = "manual",
     lock_ttl_seconds: int = 3600,
+    lineage_input_uri: str | None = None,
+    lineage_emitter: LineageEmitter | None = None,
 ) -> dict[str, int | str]:
     """Run one atomic batch and return auditable pipeline metrics."""
     run_id = str(uuid.uuid4())
@@ -230,6 +233,20 @@ def run_pipeline(
         raise ValueError("provide database_path or database_url, not both")
     if database_url is None:
         database_url = sqlite_url(database_path or Path("warehouse.db"))
+
+    lineage_emitter = lineage_emitter or LineageEmitter.from_environment()
+    lineage_inputs = [source_dataset(lineage_input_uri or input_path)]
+    lineage_outputs = warehouse_datasets(database_url)
+    job_name = lineage_job_name(trigger_type)
+    lineage_emitter.emit_run_event(
+        state="START",
+        run_id=run_id,
+        job_name=job_name,
+        inputs=lineage_inputs,
+        outputs=lineage_outputs,
+        nominal_start=batch_date or started_at,
+        integration="airflow" if trigger_type == "airflow" else "python",
+    )
 
     with Database.connect(database_url) as database:
         apply_migrations(database)
@@ -299,6 +316,16 @@ def run_pipeline(
                     "error_type": type(error).__name__,
                 },
             )
+            lineage_emitter.emit_run_event(
+                state="FAIL",
+                run_id=run_id,
+                job_name=job_name,
+                inputs=lineage_inputs,
+                outputs=lineage_outputs,
+                nominal_start=batch_date or started_at,
+                error=error,
+                integration="airflow" if trigger_type == "airflow" else "python",
+            )
             raise
         finally:
             release_lock(
@@ -308,6 +335,23 @@ def run_pipeline(
             )
 
     quality_checks_passed = len(quality_results)
+    row_counts = {
+        "staging_orders": accepted_rows,
+        "fact_orders": accepted_rows,
+        "quarantined_orders": quarantined_rows,
+        "data_quality_results": quality_checks_passed,
+        "pipeline_runs": 1,
+    }
+    lineage_emitter.emit_run_event(
+        state="COMPLETE",
+        run_id=run_id,
+        job_name=job_name,
+        inputs=lineage_inputs,
+        outputs=lineage_outputs,
+        nominal_start=batch_date or started_at,
+        output_row_counts=row_counts,
+        integration="airflow" if trigger_type == "airflow" else "python",
+    )
     LOGGER.info(
         "Pipeline succeeded",
         extra={

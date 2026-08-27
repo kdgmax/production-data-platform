@@ -13,6 +13,7 @@ from typing import Any
 
 from .database import Database
 from .landing import claim_file, finish_file, identify_file
+from .lineage import LineageEmitter, source_dataset, spark_output_datasets
 from .locking import acquire_lock, release_lock
 from .migrations import apply_migrations
 from .object_store import materialize_object
@@ -175,6 +176,8 @@ def run_spark_pipeline(
     database_url: str,
     batch_date: date,
     master: str = "local[2]",
+    lineage_input_uri: str | None = None,
+    lineage_emitter: LineageEmitter | None = None,
 ) -> dict[str, Any]:
     run_id = str(uuid.uuid4())
     started_at = utc_now()
@@ -185,6 +188,18 @@ def run_spark_pipeline(
         "deduplicated_rows": 0,
     }
     spark = None
+    lineage_emitter = lineage_emitter or LineageEmitter.from_environment()
+    lineage_inputs = [source_dataset(lineage_input_uri or input_path)]
+    lineage_outputs = spark_output_datasets(output_root, batch_date)
+    lineage_emitter.emit_run_event(
+        state="START",
+        run_id=run_id,
+        job_name="orders.spark_transform",
+        inputs=lineage_inputs,
+        outputs=lineage_outputs,
+        nominal_start=batch_date,
+        integration="spark",
+    )
 
     with Database.connect(database_url) as database:
         apply_migrations(database)
@@ -241,6 +256,16 @@ def run_spark_pipeline(
                     error_message=str(error),
                     **metrics,
                 )
+            lineage_emitter.emit_run_event(
+                state="FAIL",
+                run_id=run_id,
+                job_name="orders.spark_transform",
+                inputs=lineage_inputs,
+                outputs=lineage_outputs,
+                nominal_start=batch_date,
+                error=error,
+                integration="spark",
+            )
             raise
         finally:
             if spark is not None:
@@ -250,6 +275,20 @@ def run_spark_pipeline(
                 lock_name="spark_orders_pipeline",
                 owner_run_id=run_id,
             )
+
+    lineage_emitter.emit_run_event(
+        state="COMPLETE",
+        run_id=run_id,
+        job_name="orders.spark_transform",
+        inputs=lineage_inputs,
+        outputs=lineage_outputs,
+        nominal_start=batch_date,
+        output_row_counts={
+            lineage_outputs[0].name: metrics["accepted_rows"],
+            lineage_outputs[1].name: metrics["quarantined_rows"],
+        },
+        integration="spark",
+    )
 
     return {
         "run_id": run_id,
@@ -269,6 +308,7 @@ def process_spark_source_file(
     database_url: str,
     batch_date: date,
     master: str = "local[2]",
+    lineage_emitter: LineageEmitter | None = None,
 ) -> dict[str, Any]:
     with materialize_object(source_uri) as materialized:
         identity = identify_file(materialized.path)
@@ -297,6 +337,8 @@ def process_spark_source_file(
                 database_url=database_url,
                 batch_date=batch_date,
                 master=master,
+                lineage_input_uri=source_uri,
+                lineage_emitter=lineage_emitter,
             )
         except Exception as error:
             finish_file(

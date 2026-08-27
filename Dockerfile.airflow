@@ -4,7 +4,8 @@ COPY --chown=airflow:root pyproject.toml README.md /opt/airflow/project/
 COPY --chown=airflow:root src /opt/airflow/project/src
 COPY --chown=airflow:root dags /opt/airflow/project/dags
 COPY --chown=airflow:root data /opt/airflow/project/data
+COPY --chown=airflow:root docker/openlineage-airflow.yml /opt/airflow/project/openlineage.yml
 
-RUN pip install --no-cache-dir /opt/airflow/project
+RUN pip install --no-cache-dir "/opt/airflow/project[lineage]"
 
 ENV AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/project/dags
