@@ -30,8 +30,8 @@ def test_storage_has_encryption_versioning_retention_and_no_public_access() -> N
         "restrict_public_buckets = true",
         'status = "Enabled"',
         'sse_algorithm     = "aws:kms"',
-        'blocked_encryption_types = ["SSE-C"]',
         'variable = "aws:SecureTransport"',
+        'variable = "s3:x-amz-server-side-encryption-customer-algorithm"',
         "days_after_initiation = 7",
     ):
         assert setting in storage

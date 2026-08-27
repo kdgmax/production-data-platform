@@ -41,8 +41,7 @@ resource "aws_s3_bucket_versioning" "data" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   for_each = aws_s3_bucket.data
 
-  bucket                   = each.value.id
-  blocked_encryption_types = ["SSE-C"]
+  bucket = each.value.id
 
   rule {
     bucket_key_enabled = true
@@ -108,6 +107,22 @@ data "aws_iam_policy_document" "require_tls" {
     condition {
       test     = "Bool"
       variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  statement {
+    sid       = "DenyCustomerProvidedEncryptionKeys"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${each.value.arn}/*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "s3:x-amz-server-side-encryption-customer-algorithm"
       values   = ["false"]
     }
   }
