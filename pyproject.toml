@@ -7,15 +7,16 @@ name = "production-data-platform"
 version = "0.1.0"
 description = "A production-minded reference implementation for reliable batch data pipelines."
 requires-python = ">=3.11"
-dependencies = ["psycopg[binary]>=3.2,<4"]
+dependencies = ["boto3>=1.35,<2", "psycopg[binary]>=3.2,<4"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["moto[s3]>=5,<6", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 run-data-pipeline = "data_platform.cli:main"
 data-platform-health = "data_platform.health:main"
 data-platform-backfill = "data_platform.backfill:main"
+data-platform-land = "data_platform.landing:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
