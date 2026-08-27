@@ -18,6 +18,7 @@ flowchart TD
     D -->|Spark| F["Partitioned Parquet"]
     E --> G["Quality checks and lineage"]
     F --> G
+    G --> H["SLOs and operations dashboard"]
 ```
 
 ## Reliability properties
@@ -42,6 +43,8 @@ flowchart TD
 | Spark schema control | Source fields enter as strings and are explicitly parsed into typed columns. |
 | Deterministic Spark deduplication | A window keeps the newest source version with a stable tie-breaker. |
 | Partition isolation | Spark uses dynamic overwrite for the requested `batch_date` partition. |
+| Reliability SLO | Historical success rate is evaluated against a configurable target. |
+| Monitoring portability | UI-independent metrics are available to Streamlit and JSON consumers. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -94,6 +97,23 @@ Spark is optional because it solves a different workload from the transactional 
 Python and SQL path remains the clearest option for small atomic warehouse batches, while Spark
 provides a cluster-ready path for larger partitioned datasets.
 
+## Monitoring and dashboard
+
+`monitoring.py` queries the operational tables through the shared database adapter and builds one
+portable snapshot. It includes run success rate, row throughput, quarantine rate, deduplication,
+execution-path breakdowns, file-manifest state, recent run details, and persisted quality
+failures. Aggregations that differ across SQL dialects are completed in Python so SQLite and
+PostgreSQL expose the same contract.
+
+The snapshot evaluates a configurable run-success SLO. The platform is marked `degraded` when the
+latest run failed, the success rate is below target, a landed file failed, or a persisted quality
+check has violations. This produces explicit alert reasons rather than a decorative red status.
+
+`dashboard.py` renders that contract in Streamlit, while `data-platform-observe` emits the same
+data as JSON for automated consumers. The UI contains KPI cards and separate views for trends,
+recent runs, quality failures, and file state. Streamlit's application test harness renders the
+dashboard during CI so presentation changes are verified without browser automation.
+
 Run the complete PostgreSQL stack with:
 
 ```bash
@@ -135,5 +155,4 @@ actively processing checksum is rejected so concurrent workers cannot duplicate 
 
 ## Planned milestones
 
-1. Publish run-health metrics to an observability dashboard.
-2. Add scheduled orchestration with Airflow or Dagster.
+1. Add scheduled orchestration with Airflow or Dagster.

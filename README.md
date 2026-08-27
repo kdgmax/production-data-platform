@@ -32,7 +32,8 @@ This repository implements those concerns in a small system that can be run loca
 | File lineage | Every successful object records its URI, checksum, size, ETag, batch date, and run ID. |
 | Scale-out processing | Spark applies schema enforcement, deterministic deduplication, and quarantine rules. |
 | Partitioned lake output | Accepted and rejected rows are written as batch-date-partitioned Parquet datasets. |
-| Observability | JSON logs, run metrics, error messages, and quality results support investigation. |
+| Operational dashboard | Streamlit visualizes SLOs, throughput, quarantine, quality, and file health. |
+| Machine-readable monitoring | The same portable metrics contract is available as JSON for automation. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, Spark tests, and a PostgreSQL integration test. |
 
@@ -47,6 +48,7 @@ flowchart TD
     D -->|Spark| F["Partitioned Parquet"]
     E --> G["Quality and lineage"]
     F --> G
+    G --> H["Operations dashboard"]
 ```
 
 Read the detailed [architecture and engineering decisions](docs/architecture.md).
@@ -158,6 +160,31 @@ same checksum manifest, database lock, run audit, and persisted quality results 
 Local mode defaults to `local[2]`. A cluster master can be supplied with `--master` without
 changing the transformation contract.
 
+## Monitor platform operations
+
+Install the optional dashboard dependency and launch Streamlit:
+
+```bash
+python -m pip install -e ".[dashboard]"
+
+data-platform-dashboard \
+  --database-url sqlite:///warehouse.db \
+  --port 8501
+```
+
+The dashboard shows eight operational KPIs, daily success and failure trends, input volume,
+execution-path breakdowns, recent run drill-downs, persisted quality failures, and file-manifest
+status. A configurable success-rate SLO changes the platform state to `degraded` when reliability
+falls below the target.
+
+The same snapshot is available as JSON for scripts, alerts, or external monitoring systems:
+
+```bash
+data-platform-observe \
+  --database-url sqlite:///warehouse.db \
+  --success-slo-percent 95
+```
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -183,6 +210,9 @@ src/data_platform/
   landing.py           checksum claims and exactly-once file processing
   object_store.py      local and S3-compatible object materialization
   spark_pipeline.py    partitioned Spark validation and Parquet processing
+  monitoring.py        portable historical metrics and SLO evaluation
+  dashboard.py         Streamlit operations dashboard
+  dashboard_cli.py     dashboard process launcher
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   sql/                 dialect-specific migrations and models
@@ -198,8 +228,9 @@ pytest
 ruff check .
 ```
 
-GitHub Actions installs Spark, starts a PostgreSQL service, and executes both processing engines
-on every pull request.
+GitHub Actions installs Spark and Streamlit, starts a PostgreSQL service, executes both processing
+engines, and renders the dashboard through Streamlit's application test harness on every pull
+request.
 
 ## Engineering decisions
 
@@ -210,8 +241,8 @@ on every pull request.
 - Quality results are stored as data, not only emitted as logs, so historical runs can be audited.
 - Spark is an optional dependency so the lightweight Python and SQL learning path remains fast.
 - The Spark path writes Parquet lake datasets while the transactional path owns warehouse models.
+- Dashboard metrics live in a UI-independent query layer so they can also power alerts and APIs.
 
 ## Roadmap
 
-- Publish run-health metrics to an observability dashboard
 - Add scheduled orchestration with Airflow or Dagster
