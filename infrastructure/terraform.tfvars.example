@@ -1,0 +1,16 @@
+project_name = "production-data-platform"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+database_instance_class = "db.t4g.micro"
+database_multi_az       = false
+protect_database        = true
+
+force_destroy_buckets      = false
+object_retention_days      = 365
+enable_interface_endpoints = false
+
+# Add the security group of your ECS, Airflow, or Spark workers before expecting database access.
+database_client_security_group_ids = []
+
+# alarm_topic_arn = "arn:aws:sns:us-east-1:123456789012:data-platform-alerts"

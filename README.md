@@ -35,8 +35,9 @@ This repository implements those concerns in a small system that can be run loca
 | Operational dashboard | Streamlit visualizes SLOs, throughput, quarantine, quality, and file health. |
 | Machine-readable monitoring | The same portable metrics contract is available as JSON for automation. |
 | Scheduled orchestration | Airflow 3 schedules daily partitions with catchup, retries, dependencies, and SLO gates. |
+| Cloud infrastructure | Terraform provisions private networking, encrypted S3 and RDS, scoped IAM, and alarms. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
-| Delivery controls | Pull requests run linting, Spark tests, and a PostgreSQL integration test. |
+| Delivery controls | Pull requests run linting, Terraform validation, Spark tests, and a PostgreSQL integration test. |
 
 ## Architecture
 
@@ -220,6 +221,32 @@ The Compose file uses PostgreSQL for Airflow metadata and a separate `data_platf
 pipeline state. For production, credentials should come from Airflow Connections or an external
 secrets backend rather than inline development values.
 
+## Provision AWS infrastructure with Terraform
+
+The `infrastructure` module defines a deliberately small AWS foundation for the platform:
+
+- An isolated VPC with two private subnets and no internet gateway or NAT gateway
+- KMS-encrypted landing and processed S3 buckets with versioning, retention, and public access blocked
+- A private encrypted PostgreSQL RDS instance with an RDS-managed Secrets Manager password
+- A resource-scoped ECS task role for S3, KMS, and database-secret access
+- An S3 gateway endpoint, optional private service endpoints, and RDS CloudWatch alarms
+
+Terraform validates in CI, but CI never runs `plan` or `apply`. This keeps cloud credentials and
+resource creation outside pull-request automation. To inspect the module locally:
+
+```bash
+cp infrastructure/terraform.tfvars.example infrastructure/terraform.tfvars
+terraform -chdir=infrastructure init
+terraform -chdir=infrastructure fmt -check
+terraform -chdir=infrastructure validate
+terraform -chdir=infrastructure plan
+```
+
+No pipeline compute is provisioned yet. The module outputs private subnet IDs, bucket names,
+database connectivity, and an ECS task role so a future runtime can be added without opening the
+data layer to the public internet. See the [infrastructure guide](infrastructure/README.md) for
+deployment, state, security, and cost notes.
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -256,6 +283,7 @@ tests/                 unit, failure-path, health, and integration tests
 data/                  synthetic source data
 .github/workflows/     CI configuration
 dags/                  Airflow 3 DAG definitions
+infrastructure/        secure AWS foundation expressed as Terraform
 ```
 
 ## Test and validate
@@ -263,11 +291,14 @@ dags/                  Airflow 3 DAG definitions
 ```bash
 pytest
 ruff check .
+terraform fmt -check -recursive infrastructure
+terraform -chdir=infrastructure init -backend=false
+terraform -chdir=infrastructure validate
 ```
 
-GitHub Actions installs Airflow, Spark, and Streamlit, validates the Airflow Compose file, starts a
-PostgreSQL service, executes both processing engines, parses the DAG graph, and renders the
-dashboard through Streamlit's application test harness on every pull request.
+GitHub Actions installs Airflow, Spark, and Streamlit, validates Terraform and the Airflow Compose
+file, starts a PostgreSQL service, executes both processing engines, parses the DAG graph, and
+renders the dashboard through Streamlit's application test harness on every pull request.
 
 ## Engineering decisions
 
@@ -281,8 +312,10 @@ dashboard through Streamlit's application test harness on every pull request.
 - Dashboard metrics live in a UI-independent query layer so they can also power alerts and APIs.
 - Airflow DAG code stays thin while orchestration runtime functions remain directly unit-testable.
 - Catchup reuses the same exactly-once landing path instead of creating a separate backfill loader.
+- Terraform provides the shared data layer while compute remains a separate scaling decision.
+- Private networking avoids recurring NAT cost and prevents accidental public database exposure.
 
 ## Roadmap
 
 - Add OpenLineage event emission across Airflow, Spark, and warehouse runs
-- Provision a cloud deployment with Terraform
+- Add an on-demand ECS runtime and deployment workflow for the Terraform foundation

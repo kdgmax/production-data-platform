@@ -48,6 +48,7 @@ flowchart TD
 | Monitoring portability | UI-independent metrics are available to Streamlit and JSON consumers. |
 | Scheduled execution | Airflow maps logical dates to source partitions on a daily UTC schedule. |
 | Orchestrator resilience | Exponential task retries and bounded concurrency complement database locks. |
+| Infrastructure as code | Terraform defines private AWS networking, storage, database, IAM, and alarms. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -182,7 +183,39 @@ same bytes arrive under another object key.
 Failed manifest entries remain retryable. A later attempt can reclaim the same checksum, while an
 actively processing checksum is rejected so concurrent workers cannot duplicate work.
 
+## AWS deployment foundation
+
+The Terraform module separates the durable data layer from compute. It provisions encrypted S3
+buckets, a private PostgreSQL RDS instance, narrowly scoped runtime identity, and monitoring inside
+an isolated two-subnet VPC. This establishes clear security and state boundaries without forcing
+an always-on Airflow, ECS, or Spark deployment.
+
+```mermaid
+flowchart TD
+    IAM["Scoped ECS task role"] --> Workers["Future private workers"]
+    Workers --> Endpoint["S3 gateway endpoint"]
+    Endpoint --> Buckets["Landing and processed buckets"]
+    Workers --> RDS["Private PostgreSQL RDS"]
+    KMS["Customer-managed KMS key"] --> Buckets
+    KMS --> RDS
+    RDS --> Alarms["CloudWatch alarms"]
+```
+
+There is no route to the public internet. PostgreSQL accepts traffic only from explicitly supplied
+worker security groups, and that allowlist is empty by default. RDS manages its master password in
+Secrets Manager, while the runtime role receives access only to the generated secret, the two data
+buckets, and the encryption key.
+
+The design makes two conscious cost tradeoffs. The free S3 gateway endpoint is always present,
+while paid interface endpoints are opt-in until private compute needs them. The default RDS class
+and single-AZ configuration suit a development environment; production should enable Multi-AZ and
+select capacity from measured workload requirements.
+
+CI formats and validates Terraform but never plans or applies it. Cloud deployment should use a
+separate approval-protected workflow with short-lived GitHub OIDC credentials and remote encrypted
+state. See `infrastructure/README.md` for operating instructions.
+
 ## Planned milestones
 
 1. Add OpenLineage event emission across Airflow, Spark, and warehouse runs.
-2. Provision a cloud deployment with Terraform.
+2. Add an on-demand ECS runtime and approval-protected deployment workflow.
