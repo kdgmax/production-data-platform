@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kdgmax/production-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/kdgmax/production-data-platform/actions/workflows/ci.yml)
 
-A production-minded batch data platform built with Python, SQL, PostgreSQL, SQLite, Docker, and GitHub Actions. It demonstrates how to ingest imperfect source data, preserve invalid records, model analytical tables, verify data quality, and make every pipeline run auditable.
+A production-minded batch data platform built with Python, SQL, S3, PostgreSQL, SQLite, Docker, and GitHub Actions. It demonstrates how to ingest imperfect source data, prevent duplicate file processing, preserve invalid records, model analytical tables, verify data quality, and make every pipeline run auditable.
 
 ## Why this project exists
 
@@ -24,6 +24,9 @@ This repository implements those concerns in a small system that can be run loca
 | Backfills | Date-partitioned files can be replayed through the same production path. |
 | Concurrency safety | Expiring database locks prevent overlapping writers. |
 | Retry behavior | Transient failures use bounded exponential backoff. |
+| Object storage | Local and S3-compatible objects share one landing interface. |
+| Exactly-once files | SHA-256 manifest claims prevent duplicate content from being processed twice. |
+| File lineage | Every successful object records its URI, checksum, size, ETag, batch date, and run ID. |
 | Observability | JSON logs, run metrics, error messages, and quality results support investigation. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, unit tests, and a PostgreSQL integration test. |
@@ -32,12 +35,12 @@ This repository implements those concerns in a small system that can be run loca
 
 ```mermaid
 flowchart TD
-    A["CSV source"] --> B["Validation and deduplication"]
-    B -->|valid| C["Incremental staging"]
-    B -->|invalid| D["Quarantine"]
-    C --> E["Dimension and fact models"]
-    E --> F["SQL reconciliation"]
-    D --> G["Run audit and JSON logs"]
+    A["Local or S3 object"] --> B["Checksum and manifest claim"]
+    B -->|new| C["Validation and deduplication"]
+    B -->|known| D["Skip duplicate content"]
+    C -->|valid| E["Dimension and fact models"]
+    C -->|invalid| F["Quarantine"]
+    E --> G["Reconciliation and lineage"]
     F --> G
 ```
 
@@ -112,6 +115,22 @@ Every partition is recorded with its batch date and trigger type. Replaying the 
 duplicate facts, and `--continue-on-error` allows independent dates to proceed when one partition
 is missing or invalid.
 
+## Land a local or S3 object
+
+```bash
+data-platform-land \
+  --source-uri s3://my-data-bucket/orders/date=2026-08-27/orders.csv \
+  --batch-date 2026-08-27 \
+  --database-url postgresql://user:password@localhost:5432/data_platform
+```
+
+The landing command materializes the object, calculates its SHA-256 checksum, atomically claims
+the checksum in `file_manifest`, and runs the normal pipeline. Re-uploading identical bytes under
+a different key is skipped and linked to the original successful run.
+
+Standard AWS credentials are supported automatically. An S3-compatible service can be selected
+with `DATA_PLATFORM_S3_ENDPOINT_URL`.
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -122,6 +141,7 @@ is missing or invalid.
 - `data_quality_results`: reconciliation results associated with a pipeline run
 - `schema_migrations`: ordered migration history for the selected database
 - `pipeline_locks`: expiring ownership records that prevent overlapping writers
+- `file_manifest`: object-level checksum, lineage, status, and processing ownership
 
 ## Repository structure
 
@@ -133,6 +153,8 @@ src/data_platform/
   quality.py           reconciliation enforcement
   health.py            latest-run operational summary
   backfill.py          date-range replay and retry orchestration
+  landing.py           checksum claims and exactly-once file processing
+  object_store.py      local and S3-compatible object materialization
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   sql/                 dialect-specific migrations and models
@@ -160,6 +182,5 @@ GitHub Actions also starts a PostgreSQL service and executes the full integratio
 
 ## Roadmap
 
-- Land source files in object storage before warehouse loading
 - Add partitioned Spark processing for higher-volume batches
 - Publish run-health metrics to an observability dashboard
