@@ -1,0 +1,4 @@
+order_id,customer_id,order_ts,status,amount_usd,source_updated_at
+ORD-2002,CUST-202,2026-08-25T09:30:00Z,completed,80.50,2026-08-26T10:00:00Z
+ORD-2003,CUST-203,2026-08-26T11:00:00Z,completed,210.25,2026-08-26T11:02:00Z
+
