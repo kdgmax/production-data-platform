@@ -9,16 +9,20 @@ import sqlite3
 import time
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 import psycopg
 
+from .landing import FileAlreadyClaimedError, process_source_file
 from .locking import PipelineLockedError
 from .observability import configure_logging
-from .pipeline import run_pipeline
 
-RETRYABLE_ERRORS = (PipelineLockedError, sqlite3.OperationalError, psycopg.OperationalError)
+RETRYABLE_ERRORS = (
+    FileAlreadyClaimedError,
+    PipelineLockedError,
+    sqlite3.OperationalError,
+    psycopg.OperationalError,
+)
 
 
 @dataclass(frozen=True)
@@ -57,14 +61,14 @@ def run_backfill(
     results: list[BatchResult] = []
 
     for batch_date in iter_dates(start_date, end_date):
-        source_path = Path(source_template.format(date=batch_date.isoformat()))
+        source_uri = source_template.format(date=batch_date.isoformat())
         attempt = 0
 
         while True:
             attempt += 1
             try:
-                metrics = run_pipeline(
-                    source_path,
+                metrics = process_source_file(
+                    source_uri=source_uri,
                     database_url=database_url,
                     batch_date=batch_date,
                     trigger_type="backfill",
@@ -72,7 +76,7 @@ def run_backfill(
                 results.append(
                     BatchResult(
                         batch_date=batch_date.isoformat(),
-                        status="succeeded",
+                        status=str(metrics["status"]),
                         attempts=attempt,
                         run_id=str(metrics["run_id"]),
                     )
@@ -106,6 +110,7 @@ def run_backfill(
             break
 
     succeeded = sum(result.status == "succeeded" for result in results)
+    skipped = sum(result.status == "skipped" for result in results)
     failed = sum(result.status == "failed" for result in results)
     status = "succeeded" if failed == 0 else ("partial" if succeeded else "failed")
 
@@ -114,6 +119,7 @@ def run_backfill(
         "requested_batches": (end_date - start_date).days + 1,
         "processed_batches": len(results),
         "succeeded_batches": succeeded,
+        "skipped_batches": skipped,
         "failed_batches": failed,
         "batches": [asdict(result) for result in results],
     }
