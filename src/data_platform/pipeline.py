@@ -7,10 +7,11 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .database import Database, sqlite_url
+from .locking import acquire_lock, release_lock
 from .migrations import apply_migrations
 from .quality import QualityResult, assert_quality, run_reconciliation_checks
 from .sql_loader import read_sql
@@ -178,14 +179,17 @@ def store_run(
     quarantined_rows: int,
     deduplicated_rows: int,
     status: str,
+    batch_date: date | None,
+    trigger_type: str,
     error_message: str | None = None,
 ) -> None:
     database.execute(
         """
         INSERT INTO pipeline_runs (
             run_id, started_at, completed_at, input_rows, accepted_rows,
-            quarantined_rows, deduplicated_rows, status, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            quarantined_rows, deduplicated_rows, status, error_message,
+            batch_date, trigger_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -197,6 +201,8 @@ def store_run(
             deduplicated_rows,
             status,
             error_message,
+            batch_date,
+            trigger_type,
         ),
     )
 
@@ -206,6 +212,9 @@ def run_pipeline(
     database_path: Path | None = None,
     *,
     database_url: str | None = None,
+    batch_date: date | None = None,
+    trigger_type: str = "manual",
+    lock_ttl_seconds: int = 3600,
 ) -> dict[str, int | str]:
     """Run one atomic batch and return auditable pipeline metrics."""
     run_id = str(uuid.uuid4())
@@ -224,6 +233,12 @@ def run_pipeline(
 
     with Database.connect(database_url) as database:
         apply_migrations(database)
+        acquire_lock(
+            database,
+            lock_name="orders_pipeline",
+            owner_run_id=run_id,
+            ttl_seconds=lock_ttl_seconds,
+        )
         try:
             orders, quarantined, deduplicated_rows = read_and_validate(input_path)
             accepted_rows = len(orders)
@@ -258,6 +273,8 @@ def run_pipeline(
                     quarantined_rows=quarantined_rows,
                     deduplicated_rows=deduplicated_rows,
                     status="succeeded",
+                    batch_date=batch_date,
+                    trigger_type=trigger_type,
                 )
         except Exception as error:
             with database.transaction():
@@ -270,6 +287,8 @@ def run_pipeline(
                     quarantined_rows=quarantined_rows,
                     deduplicated_rows=deduplicated_rows,
                     status="failed",
+                    batch_date=batch_date,
+                    trigger_type=trigger_type,
                     error_message=str(error),
                 )
             LOGGER.exception(
@@ -281,6 +300,12 @@ def run_pipeline(
                 },
             )
             raise
+        finally:
+            release_lock(
+                database,
+                lock_name="orders_pipeline",
+                owner_run_id=run_id,
+            )
 
     quality_checks_passed = len(quality_results)
     LOGGER.info(
@@ -304,4 +329,6 @@ def run_pipeline(
         "quarantined_rows": quarantined_rows,
         "deduplicated_rows": deduplicated_rows,
         "quality_checks_passed": quality_checks_passed,
+        "batch_date": batch_date.isoformat() if batch_date else "",
+        "trigger_type": trigger_type,
     }

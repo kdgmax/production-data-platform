@@ -34,6 +34,9 @@ flowchart TD
 | Observability | Every execution emits JSON logs and writes counts and status to `pipeline_runs`. |
 | Portability | The same pipeline contract runs against SQLite and PostgreSQL. |
 | Schema evolution | Ordered SQL migrations are recorded in `schema_migrations`. |
+| Concurrency control | A database-backed lock prevents overlapping pipeline writers. |
+| Safe replay | Date partitions can be rerun without duplicating facts. |
+| Retry control | Transient database and lock failures use bounded exponential backoff. |
 | Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
@@ -44,6 +47,7 @@ flowchart TD
 - `quarantined_orders` preserves the raw record and all validation failures.
 - `pipeline_runs` provides an audit trail for every execution.
 - `data_quality_results` stores each post-transformation reconciliation result.
+- `pipeline_locks` stores expiring ownership records for active writers.
 
 ## Run locally
 
@@ -51,7 +55,7 @@ flowchart TD
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-run-data-pipeline --input data/sample_orders.csv --database warehouse.db
+run-data-pipeline --input data/sample_orders.csv --database-url sqlite:///warehouse.db
 pytest
 ```
 
@@ -76,7 +80,24 @@ Inspect the latest run with:
 data-platform-health --database-url sqlite:///warehouse.db
 ```
 
+## Backfills and orchestration
+
+Historical partitions are replayed through the same validation, transformation, reconciliation,
+and audit path as a manual run:
+
+```bash
+data-platform-backfill \
+  --start-date 2026-08-25 \
+  --end-date 2026-08-27 \
+  --source-template 'data/partitions/date={date}/orders.csv' \
+  --database-url sqlite:///warehouse.db
+```
+
+Each run stores `batch_date` and `trigger_type`. A replay is safe because staging and fact tables
+use business-key upserts with source-version comparisons. Locks expire automatically so a crashed
+worker cannot block the pipeline permanently.
+
 ## Planned milestones
 
-1. Add orchestration and backfill support.
+1. Add an object-storage landing zone and file manifest.
 2. Add a Spark implementation for partitioned, higher-volume data.
