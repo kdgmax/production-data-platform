@@ -26,6 +26,9 @@ services:
       DATA_PLATFORM_DATABASE_URL: postgresql://airflow:airflow@postgres:5432/data_platform
       DATA_PLATFORM_SOURCE_TEMPLATE: /opt/airflow/project/data/partitions/date={date}/orders.csv
       DATA_PLATFORM_SUCCESS_SLO: "95"
+      DATA_PLATFORM_OPENLINEAGE_ENABLED: "true"
+      DATA_PLATFORM_OPENLINEAGE_NAMESPACE: production-data-platform
+      OPENLINEAGE_CONFIG: /opt/airflow/project/openlineage.yml
     ports:
       - "8080:8080"
     depends_on:

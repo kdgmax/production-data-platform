@@ -11,3 +11,4 @@ build/
 *.tfstate.*
 *.tfvars
 crash.log
+lineage-events.jsonl

@@ -11,6 +11,7 @@ pytest.importorskip("pyspark")
 from pyspark.sql import SparkSession
 
 from data_platform.database import sqlite_url
+from data_platform.lineage import LineageEmitter
 from data_platform.spark_pipeline import process_spark_source_file
 
 from .test_pipeline import order, write_orders
@@ -19,6 +20,14 @@ from .test_pipeline import order, write_orders
 def scalar(database: Path, query: str):
     with sqlite3.connect(database) as connection:
         return connection.execute(query).fetchone()[0]
+
+
+class RecordingClient:
+    def __init__(self) -> None:
+        self.events = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
 
 
 def test_spark_partitions_valid_and_quarantined_rows(tmp_path: Path) -> None:
@@ -37,12 +46,14 @@ def test_spark_partitions_valid_and_quarantined_rows(tmp_path: Path) -> None:
             missing_identifiers,
         ],
     )
+    lineage_client = RecordingClient()
 
     result = process_spark_source_file(
         source_uri=str(source),
         output_root=output,
         database_url=sqlite_url(database),
         batch_date=date(2026, 8, 25),
+        lineage_emitter=LineageEmitter(lineage_client, strict=True),
     )
 
     assert result["input_rows"] == 4
@@ -50,6 +61,16 @@ def test_spark_partitions_valid_and_quarantined_rows(tmp_path: Path) -> None:
     assert result["quarantined_rows"] == 2
     assert result["deduplicated_rows"] == 1
     assert result["quality_checks_passed"] == 4
+    assert [event.eventType.value for event in lineage_client.events] == [
+        "START",
+        "COMPLETE",
+    ]
+    assert {event.job.name for event in lineage_client.events} == {
+        "orders.spark_transform"
+    }
+    assert lineage_client.events[-1].outputs[0].outputFacets[
+        "outputStatistics"
+    ].rowCount == 1
 
     spark = SparkSession.builder.master("local[1]").appName("verify-output").getOrCreate()
     try:

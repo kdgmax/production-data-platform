@@ -1,0 +1,9 @@
+transport:
+  type: file
+  log_file_path: /opt/airflow/logs/openlineage-events.jsonl
+  append: true
+
+facets:
+  source_code_location:
+    disabled: false
+    repo_url: https://github.com/kdgmax/production-data-platform

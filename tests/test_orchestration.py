@@ -96,4 +96,6 @@ def test_airflow_compose_declares_isolated_metadata_and_platform_databases() -> 
     airflow_environment = compose["services"]["airflow"]["environment"]
     assert airflow_environment["AIRFLOW__CORE__EXECUTOR"] == "LocalExecutor"
     assert airflow_environment["DATA_PLATFORM_DATABASE_URL"].endswith("/data_platform")
+    assert airflow_environment["DATA_PLATFORM_OPENLINEAGE_ENABLED"] == "true"
+    assert airflow_environment["OPENLINEAGE_CONFIG"].endswith("openlineage.yml")
     assert compose["services"]["postgres"]["environment"]["POSTGRES_DB"] == "airflow"

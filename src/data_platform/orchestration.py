@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any
 
 from .landing import process_source_file
+from .lineage import LineageEmitter
 from .monitoring import get_monitoring_snapshot
 
 
@@ -27,6 +28,7 @@ def run_scheduled_partition(
     *,
     source_template: str | None = None,
     database_url: str | None = None,
+    lineage_emitter: LineageEmitter | None = None,
 ) -> dict[str, Any]:
     source_template = source_template or os.getenv(
         "DATA_PLATFORM_SOURCE_TEMPLATE",
@@ -41,6 +43,7 @@ def run_scheduled_partition(
         database_url=database_url,
         batch_date=date.fromisoformat(batch_date),
         trigger_type="airflow",
+        lineage_emitter=lineage_emitter,
     )
 
 
