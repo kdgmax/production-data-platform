@@ -18,6 +18,9 @@ run-data-pipeline = "data_platform.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+data_platform = ["sql/*.sql"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -25,4 +28,3 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-
