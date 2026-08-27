@@ -19,4 +19,4 @@ def test_health_summary_reports_latest_run(tmp_path: Path) -> None:
     assert health["accepted_rows"] == 1
     assert len(health["quality_checks"]) == 4
     assert all(check["passed"] for check in health["quality_checks"])
-
+    assert health["source_file"] is None
