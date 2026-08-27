@@ -1,0 +1,10 @@
+FROM apache/airflow:3.3.1-python3.12
+
+COPY --chown=airflow:root pyproject.toml README.md /opt/airflow/project/
+COPY --chown=airflow:root src /opt/airflow/project/src
+COPY --chown=airflow:root dags /opt/airflow/project/dags
+COPY --chown=airflow:root data /opt/airflow/project/data
+
+RUN pip install --no-cache-dir /opt/airflow/project
+
+ENV AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/project/dags
