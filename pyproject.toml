@@ -7,19 +7,20 @@ name = "production-data-platform"
 version = "0.1.0"
 description = "A production-minded reference implementation for reliable batch data pipelines."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["psycopg[binary]>=3.2,<4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 run-data-pipeline = "data_platform.cli:main"
+data-platform-health = "data_platform.health:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-data_platform = ["sql/*.sql"]
+data_platform = ["sql/*.sql", "sql/sqlite/*.sql", "sql/postgresql/*.sql"]
 
 [tool.ruff]
 line-length = 100

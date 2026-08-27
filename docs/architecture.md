@@ -32,7 +32,9 @@ flowchart TD
 | Reconciliation | Four SQL checks run after transformation and are stored for every batch. |
 | Failure audit | Failed runs are persisted with their exception message after rollback. |
 | Observability | Every execution emits JSON logs and writes counts and status to `pipeline_runs`. |
-| Reproducibility | The pipeline has no runtime dependencies beyond Python and SQLite. |
+| Portability | The same pipeline contract runs against SQLite and PostgreSQL. |
+| Schema evolution | Ordered SQL migrations are recorded in `schema_migrations`. |
+| Reproducibility | Docker Compose starts PostgreSQL and runs the pipeline locally. |
 
 ## Warehouse model
 
@@ -55,16 +57,26 @@ pytest
 
 The sample includes one negative amount to demonstrate quarantine behavior.
 
-## Why SQLite first
+## Storage modes
 
-SQLite keeps the first release runnable in minutes and makes the SQL and transaction boundaries
-visible. The next milestones can replace the local storage layer with DuckDB or PostgreSQL, then
-add orchestration and a cloud object-store landing zone without changing the core reliability
-contract.
+SQLite keeps the learning path runnable in minutes. PostgreSQL demonstrates the same reliability
+contract against a production-grade database, with dialect-specific DDL and transformations kept
+in version-controlled SQL. GitHub Actions runs the test suite against PostgreSQL on every pull
+request.
+
+Run the complete PostgreSQL stack with:
+
+```bash
+docker compose up --build
+```
+
+Inspect the latest run with:
+
+```bash
+data-platform-health --database-url sqlite:///warehouse.db
+```
 
 ## Planned milestones
 
-1. Add a run-health summary command over the audit tables.
-2. Add Docker Compose with PostgreSQL.
-3. Add orchestration and backfill support.
-4. Add a Spark implementation for partitioned, higher-volume data.
+1. Add orchestration and backfill support.
+2. Add a Spark implementation for partitioned, higher-volume data.

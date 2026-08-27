@@ -11,6 +11,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: data_platform_test
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U platform -d data_platform_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -28,5 +42,6 @@ jobs:
         run: ruff check .
 
       - name: Run tests
+        env:
+          TEST_POSTGRES_URL: postgresql://platform:platform@localhost:5432/data_platform_test
         run: pytest
-

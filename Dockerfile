@@ -12,5 +12,4 @@ RUN pip install --no-cache-dir .
 COPY data ./data
 
 ENTRYPOINT ["run-data-pipeline"]
-CMD ["--input", "data/sample_orders.csv", "--database", "/tmp/warehouse.db"]
-
+CMD ["--input", "data/sample_orders.csv"]

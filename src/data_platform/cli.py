@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .observability import configure_logging
@@ -14,10 +15,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Load an orders CSV into the local warehouse.")
     parser.add_argument("--input", type=Path, required=True, help="Path to the source CSV file.")
     parser.add_argument(
-        "--database",
-        type=Path,
-        default=Path("warehouse.db"),
-        help="Path to the SQLite warehouse. Defaults to warehouse.db.",
+        "--database-url",
+        default=os.getenv("DATA_PLATFORM_DATABASE_URL", "sqlite:///warehouse.db"),
+        help="SQLite or PostgreSQL URL. Defaults to sqlite:///warehouse.db.",
     )
     parser.add_argument(
         "--log-level",
@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     configure_logging(args.log_level)
-    metrics = run_pipeline(input_path=args.input, database_path=args.database)
+    metrics = run_pipeline(input_path=args.input, database_url=args.database_url)
     print(json.dumps(metrics, indent=2, sort_keys=True))
 
 

@@ -3,6 +3,5 @@
 from importlib.resources import files
 
 
-def read_sql(filename: str) -> str:
-    return files("data_platform").joinpath("sql", filename).read_text(encoding="utf-8")
-
+def read_sql(*path_parts: str) -> str:
+    return files("data_platform").joinpath("sql", *path_parts).read_text(encoding="utf-8")
