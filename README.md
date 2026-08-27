@@ -21,6 +21,9 @@ This repository implements those concerns in a small system that can be run loca
 | Analytical modeling | Source orders become a customer dimension and order fact table. |
 | Atomicity | Failed transformations or quality checks roll back the complete batch. |
 | Schema evolution | Ordered SQL migrations are tracked in `schema_migrations`. |
+| Backfills | Date-partitioned files can be replayed through the same production path. |
+| Concurrency safety | Expiring database locks prevent overlapping writers. |
+| Retry behavior | Transient failures use bounded exponential backoff. |
 | Observability | JSON logs, run metrics, error messages, and quality results support investigation. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, unit tests, and a PostgreSQL integration test. |
@@ -95,6 +98,20 @@ data-platform-health --database-url sqlite:///warehouse.db
 
 The health command returns the latest run status, ingestion metrics, error information, and every reconciliation result.
 
+## Run a historical backfill
+
+```bash
+data-platform-backfill \
+  --start-date 2026-08-25 \
+  --end-date 2026-08-27 \
+  --source-template 'data/partitions/date={date}/orders.csv' \
+  --database-url sqlite:///warehouse.db
+```
+
+Every partition is recorded with its batch date and trigger type. Replaying the same range does not
+duplicate facts, and `--continue-on-error` allows independent dates to proceed when one partition
+is missing or invalid.
+
 ## Warehouse model
 
 - `staging_orders`: newest accepted source version for each order
@@ -104,6 +121,7 @@ The health command returns the latest run status, ingestion metrics, error infor
 - `pipeline_runs`: status and row-level metrics for every execution
 - `data_quality_results`: reconciliation results associated with a pipeline run
 - `schema_migrations`: ordered migration history for the selected database
+- `pipeline_locks`: expiring ownership records that prevent overlapping writers
 
 ## Repository structure
 
@@ -114,6 +132,8 @@ src/data_platform/
   migrations.py        ordered schema migration runner
   quality.py           reconciliation enforcement
   health.py            latest-run operational summary
+  backfill.py          date-range replay and retry orchestration
+  locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   sql/                 dialect-specific migrations and models
 tests/                 unit, failure-path, health, and integration tests
@@ -140,8 +160,6 @@ GitHub Actions also starts a PostgreSQL service and executes the full integratio
 
 ## Roadmap
 
-- Add scheduled orchestration and parameterized backfills
 - Land source files in object storage before warehouse loading
 - Add partitioned Spark processing for higher-volume batches
 - Publish run-health metrics to an observability dashboard
-
