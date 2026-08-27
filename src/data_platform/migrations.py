@@ -7,7 +7,11 @@ from datetime import UTC, datetime
 from .database import Database
 from .sql_loader import read_sql
 
-MIGRATION_VERSIONS = (1, 2)
+MIGRATIONS = {
+    1: "001_core.sql",
+    2: "002_quality.sql",
+    3: "003_orchestration.sql",
+}
 
 
 def apply_migrations(database: Database) -> list[int]:
@@ -26,11 +30,10 @@ def apply_migrations(database: Database) -> list[int]:
     }
     newly_applied: list[int] = []
 
-    for version in MIGRATION_VERSIONS:
+    for version, filename in MIGRATIONS.items():
         if version in applied:
             continue
 
-        filename = f"{version:03d}_" + ("core.sql" if version == 1 else "quality.sql")
         with database.transaction():
             database.execute_script(read_sql(database.dialect, filename))
             database.execute(
