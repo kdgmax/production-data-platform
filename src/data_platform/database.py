@@ -5,11 +5,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Self
 
 sqlite3.register_adapter(datetime, lambda value: value.isoformat())
+sqlite3.register_adapter(date, lambda value: value.isoformat())
 
 
 class UnsupportedDatabaseError(ValueError):
