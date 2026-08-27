@@ -11,12 +11,14 @@ dependencies = ["boto3>=1.35,<2", "psycopg[binary]>=3.2,<4"]
 
 [project.optional-dependencies]
 dev = ["moto[s3]>=5,<6", "pytest>=8.0", "ruff>=0.6"]
+spark = ["pyspark>=3.5,<4"]
 
 [project.scripts]
 run-data-pipeline = "data_platform.cli:main"
 data-platform-health = "data_platform.health:main"
 data-platform-backfill = "data_platform.backfill:main"
 data-platform-land = "data_platform.landing:main"
+data-platform-spark = "data_platform.spark_pipeline:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
