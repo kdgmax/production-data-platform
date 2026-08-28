@@ -32,3 +32,29 @@ output "pipeline_role_arn" {
   description = "Least-privilege IAM role for an ECS-based pipeline runtime."
   value       = aws_iam_role.pipeline.arn
 }
+
+output "ecr_repository_url" {
+  description = "ECR repository URL for the optional pipeline runtime."
+  value       = var.enable_ecs_runtime ? aws_ecr_repository.pipeline[0].repository_url : null
+}
+
+output "ecs_cluster_name" {
+  description = "ECS cluster used for on-demand pipeline tasks."
+  value       = var.enable_ecs_runtime ? aws_ecs_cluster.pipeline[0].name : null
+}
+
+output "ecs_task_definition_family" {
+  description = "Task definition family updated by the deployment workflow."
+  value       = var.enable_ecs_runtime ? aws_ecs_task_definition.pipeline[0].family : null
+}
+
+output "ecs_runtime_security_group_id" {
+  description = "No-ingress security group used by on-demand Fargate tasks."
+  value       = var.enable_ecs_runtime ? aws_security_group.ecs_runtime[0].id : null
+}
+
+output "github_deploy_role_arn" {
+  description = "Environment-scoped GitHub OIDC role for image deployment and task execution."
+  value       = var.enable_ecs_runtime ? aws_iam_role.github_deploy[0].arn : null
+}
+

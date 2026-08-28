@@ -11,7 +11,13 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .database import Database, sqlite_url
-from .lineage import LineageEmitter, lineage_job_name, source_dataset, warehouse_datasets
+from .lineage import (
+    LineageEmitter,
+    lineage_integration,
+    lineage_job_name,
+    source_dataset,
+    warehouse_datasets,
+)
 from .locking import acquire_lock, release_lock
 from .migrations import apply_migrations
 from .quality import QualityResult, assert_quality, run_reconciliation_checks
@@ -238,6 +244,7 @@ def run_pipeline(
     lineage_inputs = [source_dataset(lineage_input_uri or input_path)]
     lineage_outputs = warehouse_datasets(database_url)
     job_name = lineage_job_name(trigger_type)
+    integration = lineage_integration(trigger_type)
     lineage_emitter.emit_run_event(
         state="START",
         run_id=run_id,
@@ -245,7 +252,7 @@ def run_pipeline(
         inputs=lineage_inputs,
         outputs=lineage_outputs,
         nominal_start=batch_date or started_at,
-        integration="airflow" if trigger_type == "airflow" else "python",
+        integration=integration,
     )
 
     with Database.connect(database_url) as database:
@@ -324,7 +331,7 @@ def run_pipeline(
                 outputs=lineage_outputs,
                 nominal_start=batch_date or started_at,
                 error=error,
-                integration="airflow" if trigger_type == "airflow" else "python",
+                integration=integration,
             )
             raise
         finally:
@@ -350,7 +357,7 @@ def run_pipeline(
         outputs=lineage_outputs,
         nominal_start=batch_date or started_at,
         output_row_counts=row_counts,
-        integration="airflow" if trigger_type == "airflow" else "python",
+        integration=integration,
     )
     LOGGER.info(
         "Pipeline succeeded",
@@ -376,3 +383,4 @@ def run_pipeline(
         "batch_date": batch_date.isoformat() if batch_date else "",
         "trigger_type": trigger_type,
     }
+

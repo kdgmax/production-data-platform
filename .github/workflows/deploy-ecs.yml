@@ -1,0 +1,154 @@
+name: Deploy and run ECS pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_date:
+        description: Partition date in YYYY-MM-DD format
+        required: true
+        type: string
+      source_key:
+        description: Landing-bucket object key
+        required: true
+        type: string
+      confirmation:
+        description: Confirm this production-environment deployment
+        required: true
+        default: cancel
+        type: choice
+        options:
+          - cancel
+          - deploy
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ecs-pipeline-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirmation == 'deploy' }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: production-data-platform
+      DEPLOYMENT_ENVIRONMENT: ${{ vars.DEPLOYMENT_ENVIRONMENT || 'dev' }}
+
+    steps:
+      - name: Check out the approved revision
+        uses: actions/checkout@v6
+
+      - name: Validate deployment inputs
+        env:
+          BATCH_DATE: ${{ inputs.batch_date }}
+          SOURCE_KEY: ${{ inputs.source_key }}
+        run: |
+          set -euo pipefail
+          [[ "$BATCH_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+          test "$(date -d "$BATCH_DATE" +%F)" = "$BATCH_DATE"
+          [[ "$SOURCE_KEY" =~ ^orders/date="$BATCH_DATE"/[A-Za-z0-9._/-]+\.csv$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]
+
+      - name: Assume the scoped AWS deployment role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-ecs-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          REPOSITORY="$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT-pipeline"
+          IMAGE="$REGISTRY/$REPOSITORY:$GITHUB_SHA"
+          docker build --file Dockerfile.ecs --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "uri=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Register the immutable task revision
+        id: task_definition
+        env:
+          IMAGE: ${{ steps.image.outputs.uri }}
+        run: |
+          set -euo pipefail
+          FAMILY="$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT"
+          aws ecs describe-task-definition             --task-definition "$FAMILY"             --query taskDefinition > task-definition.json
+          jq --arg image "$IMAGE" '
+            .containerDefinitions[0].image = $image
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+          ' task-definition.json > release-task-definition.json
+          TASK_DEFINITION_ARN="$(aws ecs register-task-definition             --cli-input-json file://release-task-definition.json             --query 'taskDefinition.taskDefinitionArn'             --output text)"
+          echo "arn=$TASK_DEFINITION_ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Discover the private runtime network
+        id: network
+        run: |
+          set -euo pipefail
+          PREFIX="$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT"
+          SUBNETS="$(aws ec2 describe-subnets             --filters               "Name=tag:Tier,Values=private"               "Name=tag:Name,Values=$PREFIX-private-*"             --query 'Subnets[].SubnetId'             --output text | tr '\t' ',')"
+          SECURITY_GROUP="$(aws ec2 describe-security-groups             --filters               "Name=tag:Name,Values=$PREFIX-ecs-runtime"               "Name=vpc-id,Values=*"             --query 'SecurityGroups[0].GroupId'             --output text)"
+          test -n "$SUBNETS"
+          test "$SECURITY_GROUP" != "None"
+          echo "subnets=$SUBNETS" >> "$GITHUB_OUTPUT"
+          echo "security_group=$SECURITY_GROUP" >> "$GITHUB_OUTPUT"
+
+      - name: Start one private Fargate task
+        id: task
+        env:
+          BATCH_DATE: ${{ inputs.batch_date }}
+          SOURCE_KEY: ${{ inputs.source_key }}
+          TASK_DEFINITION_ARN: ${{ steps.task_definition.outputs.arn }}
+          SUBNETS: ${{ steps.network.outputs.subnets }}
+          SECURITY_GROUP: ${{ steps.network.outputs.security_group }}
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          BUCKET="$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT-$ACCOUNT_ID-$AWS_REGION-landing"
+          SOURCE_URI="s3://$BUCKET/$SOURCE_KEY"
+          OVERRIDES="$(jq -cn             --arg source "$SOURCE_URI"             --arg batch_date "$BATCH_DATE"             '{containerOverrides: [{name: "pipeline", command: ["--source-uri", $source, "--batch-date", $batch_date]}]}')"
+          TASK_ARN="$(aws ecs run-task             --cluster "$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT"             --task-definition "$TASK_DEFINITION_ARN"             --launch-type FARGATE             --platform-version 1.4.0             --network-configuration               "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}"             --overrides "$OVERRIDES"             --query 'tasks[0].taskArn'             --output text)"
+          test "$TASK_ARN" != "None"
+          echo "arn=$TASK_ARN" >> "$GITHUB_OUTPUT"
+          echo "source_uri=$SOURCE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the partition run
+        env:
+          TASK_ARN: ${{ steps.task.outputs.arn }}
+        run: |
+          set -euo pipefail
+          CLUSTER="$PROJECT_NAME-$DEPLOYMENT_ENVIRONMENT"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" > task-result.json
+          EXIT_CODE="$(jq -r '.tasks[0].containers[0].exitCode // 1' task-result.json)"
+          STOP_REASON="$(jq -r '.tasks[0].stoppedReason // "No stop reason returned"' task-result.json)"
+          {
+            echo "## ECS partition result"
+            echo
+            echo "- Source: \`${{ steps.task.outputs.source_uri }}\`"
+            echo "- Batch date: \`${{ inputs.batch_date }}\`"
+            echo "- Task: \`$TASK_ARN\`"
+            echo "- Exit code: \`$EXIT_CODE\`"
+            echo "- Stop reason: $STOP_REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$EXIT_CODE" -eq 0
+

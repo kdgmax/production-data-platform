@@ -36,6 +36,17 @@ resource "aws_vpc_security_group_ingress_rule" "database_clients" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "ecs_runtime" {
+  count = var.enable_ecs_runtime ? 1 : 0
+
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.ecs_runtime[0].id
+  description                  = "PostgreSQL from the on-demand ECS runtime"
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+}
+
 resource "aws_db_instance" "data_platform" {
   identifier = local.name_prefix
 
@@ -77,3 +88,4 @@ resource "aws_db_instance" "data_platform" {
     Name = local.name_prefix
   }
 }
+

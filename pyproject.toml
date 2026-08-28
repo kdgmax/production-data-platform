@@ -24,6 +24,7 @@ data-platform-land = "data_platform.landing:main"
 data-platform-spark = "data_platform.spark_pipeline:main"
 data-platform-observe = "data_platform.monitoring:main"
 data-platform-dashboard = "data_platform.dashboard_cli:main"
+data-platform-ecs-run = "data_platform.ecs_runtime:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -38,3 +39,4 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+

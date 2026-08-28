@@ -57,7 +57,10 @@ def test_network_is_private_and_runtime_policy_is_resource_scoped() -> None:
     assert 'vpc_endpoint_type = "Gateway"' in network
     assert "aws_internet_gateway" not in network
     assert "aws_nat_gateway" not in network
-    assert "resources = [\"*\"]" not in iam
+    pipeline_policy = iam.split('data "aws_iam_policy_document" "pipeline" {', 1)[1].split(
+        'resource "aws_iam_policy" "pipeline"', 1
+    )[0]
+    assert 'resources = ["*"]' not in pipeline_policy
     assert 'identifiers = ["ecs-tasks.amazonaws.com"]' in iam
 
 
@@ -85,3 +88,35 @@ def test_required_versions_are_pinned() -> None:
     assert 'required_version = "~> 1.15.0"' in versions
     assert 'version = "~> 6.60.0"' in versions
     assert "aws_s3_bucket_public_access_block" in terraform_text()
+
+
+def test_ecs_runtime_is_private_small_and_immutable() -> None:
+    compute = (INFRASTRUCTURE / "compute.tf").read_text()
+    network = (INFRASTRUCTURE / "network.tf").read_text()
+
+    assert 'image_tag_mutability = "IMMUTABLE"' in compute
+    assert "scan_on_push = true" in compute
+    assert 'requires_compatibilities = ["FARGATE"]' in compute
+    assert re.search(r"cpu\s*=\s*256", compute)
+    assert re.search(r"memory\s*=\s*512", compute)
+    assert "readonlyRootFilesystem = true" in compute
+    assert 'containerPath = "/tmp"' in compute
+    assert ":password::" in compute
+    assert 'assignPublicIp = "ENABLED"' not in compute
+    assert "aws_ecs_service" not in terraform_text()
+    assert "aws_security_group\" \"ecs_runtime" in network
+    assert "aws_vpc_security_group_ingress_rule\" \"ecs_runtime" not in network
+
+
+def test_github_oidc_trust_and_deployment_policy_are_scoped() -> None:
+    deployment = (INFRASTRUCTURE / "deployment.tf").read_text()
+
+    assert "token.actions.githubusercontent.com:aud" in deployment
+    assert 'values   = ["sts.amazonaws.com"]' in deployment
+    assert "repo:${var.github_repository}:environment:${var.github_environment}" in deployment
+    assert 'actions = ["iam:PassRole"]' in deployment
+    assert 'values   = ["ecs-tasks.amazonaws.com"]' in deployment
+    assert "AdministratorAccess" not in deployment
+    assert "AWS_ACCESS_KEY_ID" not in deployment
+    assert "AWS_SECRET_ACCESS_KEY" not in deployment
+

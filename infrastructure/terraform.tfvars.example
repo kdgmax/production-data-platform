@@ -14,3 +14,12 @@ enable_interface_endpoints = false
 database_client_security_group_ids = []
 
 # alarm_topic_arn = "arn:aws:sns:us-east-1:123456789012:data-platform-alerts"
+
+# The ECS runtime is off by default because interface endpoints have hourly cost.
+enable_ecs_runtime = false
+github_repository  = "kdgmax/production-data-platform"
+github_environment = "production"
+
+# If the account already has GitHub's OIDC provider, reuse it.
+# github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+

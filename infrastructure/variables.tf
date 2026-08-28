@@ -103,3 +103,40 @@ variable "alarm_topic_arn" {
   default     = null
   nullable    = true
 }
+
+variable "enable_ecs_runtime" {
+  description = "Create the optional ECR, ECS Fargate, private endpoints, and GitHub deployment role."
+  type        = bool
+  default     = false
+}
+
+variable "container_image_tag" {
+  description = "Initial immutable image tag used by the Terraform-managed task definition."
+  type        = string
+  default     = "bootstrap"
+}
+
+variable "github_repository" {
+  description = "GitHub repository trusted to deploy, in owner/repository form."
+  type        = string
+  default     = "kdgmax/production-data-platform"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must use owner/repository format."
+  }
+}
+
+variable "github_environment" {
+  description = "Approval-protected GitHub environment trusted by the deployment role."
+  type        = string
+  default     = "production"
+}
+
+variable "github_oidc_provider_arn" {
+  description = "Existing GitHub Actions OIDC provider ARN. Leave null for Terraform to create one."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
