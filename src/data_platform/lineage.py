@@ -258,4 +258,14 @@ class LineageEmitter:
 def lineage_job_name(trigger_type: str) -> str:
     if trigger_type == "airflow":
         return "orders.airflow_partition"
+    if trigger_type == "ecs":
+        return "orders.ecs_partition"
     return "orders.warehouse_load"
+
+
+def lineage_integration(trigger_type: str) -> str:
+    """Return the OpenLineage integration label for the execution runtime."""
+    if trigger_type in {"airflow", "ecs"}:
+        return trigger_type
+    return "python"
+

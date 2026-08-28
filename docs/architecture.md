@@ -218,12 +218,12 @@ a separate metadata server for local development.
 
 The Terraform module separates the durable data layer from compute. It provisions encrypted S3
 buckets, a private PostgreSQL RDS instance, narrowly scoped runtime identity, and monitoring inside
-an isolated two-subnet VPC. This establishes clear security and state boundaries without forcing
-an always-on Airflow, ECS, or Spark deployment.
+an isolated two-subnet VPC. The optional ECS path adds one-off compute without creating an always-on
+service.
 
 ```mermaid
 flowchart TD
-    IAM["Scoped ECS task role"] --> Workers["Future private workers"]
+    IAM["Scoped ECS application role"] --> Workers["Optional private Fargate task"]
     Workers --> Endpoint["S3 gateway endpoint"]
     Endpoint --> Buckets["Landing and processed buckets"]
     Workers --> RDS["Private PostgreSQL RDS"]
@@ -233,20 +233,53 @@ flowchart TD
 ```
 
 There is no route to the public internet. PostgreSQL accepts traffic only from explicitly supplied
-worker security groups, and that allowlist is empty by default. RDS manages its master password in
-Secrets Manager, while the runtime role receives access only to the generated secret, the two data
-buckets, and the encryption key.
+worker security groups, and that external allowlist is empty by default. RDS manages its master
+password in Secrets Manager. The task execution role can retrieve only that secret and bootstrap the
+container, while the application task role can access only the two data buckets and their encryption
+key.
 
 The design makes two conscious cost tradeoffs. The free S3 gateway endpoint is always present,
 while paid interface endpoints are opt-in until private compute needs them. The default RDS class
 and single-AZ configuration suit a development environment; production should enable Multi-AZ and
 select capacity from measured workload requirements.
 
-CI formats and validates Terraform but never plans or applies it. Cloud deployment should use a
-separate approval-protected workflow with short-lived GitHub OIDC credentials and remote encrypted
-state. See `infrastructure/README.md` for operating instructions.
+CI formats and validates Terraform but never plans or applies it. Cloud deployment uses a separate
+approval-protected workflow with short-lived GitHub OIDC credentials. Team environments should also
+configure remote encrypted state. See `infrastructure/README.md` for operating instructions.
+
+## On-demand ECS execution
+
+The Fargate path packages the transactional warehouse loader as a non-root container. The root
+filesystem is read-only, with a dedicated temporary volume used to materialize S3 objects. Each task
+receives database connection fields from the RDS-managed secret and constructs a TLS-required URL
+without logging credential values.
+
+```mermaid
+sequenceDiagram
+    actor Reviewer
+    participant GitHub
+    participant AWS as AWS OIDC and ECR
+    participant ECS
+    participant Data as S3 and RDS
+    Reviewer->>GitHub: Approve production environment
+    GitHub->>AWS: Exchange OIDC token
+    GitHub->>AWS: Push immutable commit image
+    GitHub->>ECS: Register revision and run task
+    ECS->>Data: Process one private partition
+    ECS-->>GitHub: Exit code and stop reason
+```
+
+The deployment role can push only to the pipeline repository, run only the pipeline task family on
+the pipeline cluster, and pass only the task and execution roles. Its trust policy matches the exact
+GitHub repository and `production` environment subject. The workflow does not contain AWS access
+keys and cannot run until the environment is approved.
+
+Fargate 1.4 pulls images through private ECR API and registry endpoints plus the S3 gateway endpoint.
+The task security group has no ingress and permits only VPC DNS, endpoint HTTPS, S3 HTTPS, and
+PostgreSQL to the database security group. The workflow assigns no public IP.
 
 ## Planned milestones
 
-1. Add an on-demand ECS runtime and approval-protected deployment workflow.
-2. Add column-level lineage for SQL transformations.
+1. Add column-level lineage for SQL transformations.
+2. Add artifact attestations and image-signing verification to the ECS release path.
+

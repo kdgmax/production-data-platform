@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from data_platform.database import sqlite_url
-from data_platform.lineage import LineageEmitter, database_namespace, source_dataset
+from data_platform.lineage import (
+    LineageEmitter,
+    database_namespace,
+    lineage_integration,
+    lineage_job_name,
+    source_dataset,
+)
 from data_platform.orchestration import run_scheduled_partition
 from data_platform.pipeline import run_pipeline
 
@@ -23,6 +29,11 @@ class RecordingClient:
 class FailingClient:
     def emit(self, event) -> None:
         raise ConnectionError("lineage backend unavailable")
+
+
+def test_ecs_execution_uses_distinct_lineage_identity() -> None:
+    assert lineage_job_name("ecs") == "orders.ecs_partition"
+    assert lineage_integration("ecs") == "ecs"
 
 
 def test_dataset_identity_preserves_sources_and_removes_database_credentials(
@@ -129,3 +140,4 @@ def test_airflow_execution_uses_distinct_lineage_job(tmp_path: Path) -> None:
     assert {event.job.facets["jobType"].integration for event in client.events} == {
         "airflow"
     }
+

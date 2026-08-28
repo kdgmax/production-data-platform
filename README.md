@@ -37,6 +37,7 @@ This repository implements those concerns in a small system that can be run loca
 | Scheduled orchestration | Airflow 3 schedules daily partitions with catchup, retries, dependencies, and SLO gates. |
 | OpenLineage | Warehouse, Spark, and Airflow-triggered runs emit interoperable job and dataset lineage. |
 | Cloud infrastructure | Terraform provisions private networking, encrypted S3 and RDS, scoped IAM, and alarms. |
+| On-demand cloud runtime | Private ECS Fargate tasks deploy through approval-protected GitHub OIDC. |
 | Portability | The same pipeline runs against SQLite and PostgreSQL. |
 | Delivery controls | Pull requests run linting, Terraform validation, Spark tests, and a PostgreSQL integration test. |
 
@@ -262,7 +263,7 @@ The `infrastructure` module defines a deliberately small AWS foundation for the 
 - An isolated VPC with two private subnets and no internet gateway or NAT gateway
 - KMS-encrypted landing and processed S3 buckets with versioning, retention, and public access blocked
 - A private encrypted PostgreSQL RDS instance with an RDS-managed Secrets Manager password
-- A resource-scoped ECS task role for S3, KMS, and database-secret access
+- Separate resource-scoped ECS application and execution roles
 - An S3 gateway endpoint, optional private service endpoints, and RDS CloudWatch alarms
 
 Terraform validates in CI, but CI never runs `plan` or `apply`. This keeps cloud credentials and
@@ -276,10 +277,31 @@ terraform -chdir=infrastructure validate
 terraform -chdir=infrastructure plan
 ```
 
-No pipeline compute is provisioned yet. The module outputs private subnet IDs, bucket names,
-database connectivity, and an ECS task role so a future runtime can be added without opening the
-data layer to the public internet. See the [infrastructure guide](infrastructure/README.md) for
-deployment, state, security, and cost notes.
+Pipeline compute is opt-in and disabled by default. The module outputs private subnet IDs, bucket
+names, database connectivity, and ECS deployment identifiers without opening the data layer to the
+public internet. See the [infrastructure guide](infrastructure/README.md) for deployment, state,
+security, and cost notes.
+
+## Run an approved partition on ECS
+
+The optional ECS module turns the AWS foundation into an executable platform without creating an
+always-on service. When `enable_ecs_runtime = true`, Terraform adds:
+
+- A KMS-encrypted, immutable, scan-on-push ECR repository
+- An ECS cluster and 0.25-vCPU, 512-MiB Fargate task definition
+- A non-root, read-only application container with a dedicated writable scratch volume
+- A no-ingress runtime security group with explicit S3, database, DNS, and endpoint egress
+- ECR, Secrets Manager, KMS, and CloudWatch Logs private endpoints
+- Separate task, task-execution, and GitHub deployment IAM roles
+- A GitHub OIDC trust policy restricted to this repository's `production` environment
+
+The manual `Deploy and run ECS pipeline` workflow requires environment approval, obtains short-lived
+AWS credentials, pushes an image tagged with the commit SHA, registers a task revision, runs it in
+private subnets without a public IP, waits for completion, and checks the container exit code.
+
+Terraform keeps the runtime disabled by default because private interface endpoints have recurring
+cost. No AWS deployment or apply occurs in normal CI. Follow the complete
+[ECS deployment runbook](docs/ecs-deployment.md) before enabling it.
 
 ## Warehouse model
 
@@ -313,6 +335,7 @@ src/data_platform/
   locking.py           database-backed concurrency control
   observability.py     structured JSON logging
   lineage.py           OpenLineage jobs, datasets, facets, and fail-open delivery
+  ecs_runtime.py       secret-safe one-off Fargate entry point
   sql/                 dialect-specific migrations and models
 tests/                 unit, failure-path, health, and integration tests
 data/                  synthetic source data
@@ -320,6 +343,7 @@ data/                  synthetic source data
 dags/                  Airflow 3 DAG definitions
 infrastructure/        secure AWS foundation expressed as Terraform
 openlineage.yml.example local OpenLineage file-transport configuration
+Dockerfile.ecs         non-root image for one-off Fargate tasks
 ```
 
 ## Test and validate
@@ -352,8 +376,11 @@ renders the dashboard through Streamlit's application test harness on every pull
 - Lineage delivery is fail open by default, with strict mode available for governed environments.
 - Terraform provides the shared data layer while compute remains a separate scaling decision.
 - Private networking avoids recurring NAT cost and prevents accidental public database exposure.
+- The ECS runtime is opt-in, one task per partition, and never assigns a public IP.
+- GitHub OIDC replaces stored AWS access keys and trusts only an approval-protected environment.
 
 ## Roadmap
 
-- Add an on-demand ECS runtime and deployment workflow for the Terraform foundation
 - Add column-level lineage for SQL transformations
+- Add artifact attestations and image-signing verification to the ECS release path
+
