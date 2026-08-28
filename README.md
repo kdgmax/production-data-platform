@@ -240,8 +240,8 @@ run-data-pipeline --input data/sample_orders.csv --database-url sqlite:///wareho
 uses the same run UUID stored in `pipeline_runs` and describes the job, source dataset, output
 datasets, schema, nominal batch time, code location, and available output row counts.
 
-The integration distinguishes `orders.warehouse_load`, `orders.spark_transform`, and
-`orders.airflow_partition`. S3 identities remain stable after local materialization, while database
+The integration distinguishes `orders.warehouse_load`, `orders.spark_transform`,
+`orders.airflow_partition`, and `orders.ecs_partition`. S3 identities remain stable after local materialization, while database
 namespaces exclude usernames, passwords, and query parameters. Delivery is fail open by default so
 a lineage backend outage does not stop data processing. Set `DATA_PLATFORM_OPENLINEAGE_STRICT=true`
 only when lineage delivery must be part of pipeline success.
@@ -379,8 +379,4 @@ renders the dashboard through Streamlit's application test harness on every pull
 - The ECS runtime is opt-in, one task per partition, and never assigns a public IP.
 - GitHub OIDC replaces stored AWS access keys and trusts only an approval-protected environment.
 
-## Roadmap
-
-- Add column-level lineage for SQL transformations
-- Add artifact attestations and image-signing verification to the ECS release path
 
